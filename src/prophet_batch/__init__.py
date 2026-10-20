@@ -8,3 +8,7 @@
 from __future__ import annotations
 
 __version__ = '0.1.0.dev0'
+
+from prophet_batch.predict import predict  # noqa: E402
+
+__all__ = ['predict']

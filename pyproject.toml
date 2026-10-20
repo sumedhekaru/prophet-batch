@@ -27,3 +27,6 @@ where = ["src"]
 [tool.pyrefly]
 project-includes = ["src/prophet_batch"]
 python-version = "3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
