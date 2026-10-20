@@ -37,7 +37,7 @@ import pandas as pd
 
 from prophet.models import ModelInputData, TrendIndicator
 
-from prophet_batch.predict import predict
+from prophet_batch._predict import predict
 
 if TYPE_CHECKING:
     from typing import TypeAlias
