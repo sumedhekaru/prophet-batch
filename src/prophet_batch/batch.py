@@ -15,6 +15,9 @@ penalties from the normal priors and an L1 penalty from the Laplace prior on del
 For a fixed w, the optimal sigma_obs has a closed form. We alternate the two; the
 w-step is an exact active-set method (feature-sign search), batched over series.
 Only the sufficient statistics Zᵀ Z, Zᵀ y, yᵀ y and T are needed per series.
+
+Public API: fit_many, predict_many, cross_validation_many and series_rng, re-exported by
+prophet_batch. The solvers and helpers here are internal and may change between releases.
 """
 
 from __future__ import annotations

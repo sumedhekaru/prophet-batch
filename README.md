@@ -131,6 +131,13 @@ metrics = {sid: performance_metrics(cv) for sid, cv in cvs.items()}
 (seed, series id) with `numpy.random.SeedSequence`, so results do not depend on `n_jobs`, order or batch
 composition. Without a seed, a fresh one is drawn, logged, and stored in each forecast's `attrs["seed"]`.
 
+## API stability
+
+The public API is what `prophet_batch` exports at the top level: `fit_many`, `predict_many`,
+`cross_validation_many`, `predict` and `series_rng`. Everything else (the solvers and helpers in
+`prophet_batch.batch`, such as `solve_map` or `log_posterior`, and the private modules) is internal and may change
+between releases.
+
 ## Limitations
 
 - Logistic growth, MCMC and regressor predictors are fit by Stan (correct, but not faster than stock).
