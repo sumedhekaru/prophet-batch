@@ -11,7 +11,7 @@ import numpy as np
 from prophet import Prophet
 
 sys.path.insert(0, str(Path(__file__).parent))
-from scenarios import SCENARIOS, build  # noqa: E402
+from scenarios import SCENARIOS, build, params_owners  # noqa: E402
 
 MODES = {'true': True, 'false': False, 'analytic': 'analytic'}
 # The columns that depend on the random draws (the rest is checked against stock predict directly).
@@ -27,6 +27,10 @@ def main():
     arrays = {}
     for name in SCENARIOS:
         m, future, kwargs = build(name, Prophet)
+        # Fitted params, so the test can reproduce the forecasts without Stan (whose fits differ across platforms).
+        for key, model in params_owners(m).items():
+            for k, v in model.params.items():
+                arrays[f'{name}/params/{key}/{k}'] = np.asarray(v)
         for key, mode in MODES.items():
             fc = m.predict(future, history_uncertainty=mode, rng=np.random.default_rng(11), **kwargs)
             for col in RANDOM_COLUMNS:

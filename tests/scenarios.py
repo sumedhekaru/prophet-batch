@@ -76,3 +76,12 @@ def build(name, Prophet):
         future['x'] = np.random.default_rng(5).normal(size=len(future))
     kwargs = {'vectorized': opts['vectorized']} if 'vectorized' in opts else {}
     return m, future, kwargs
+
+
+def params_owners(m):
+    """The fitted models whose params determine m's forecasts: m and any regressor predictors."""
+    owners = {'model': m}
+    for name, props in m.extra_regressors.items():
+        if props.get('predictor') is not None:
+            owners[f'predictor_{name}'] = props['predictor']
+    return owners

@@ -1,5 +1,6 @@
 """D4.1.2: prophet_batch.predict on stock Prophet equals the fork's seeded predict."""
 
+import copy
 import inspect
 import logging
 import subprocess
@@ -15,7 +16,7 @@ from prophet_batch import predict
 from prophet_batch._seeded import seeded
 
 sys.path.insert(0, str(Path(__file__).parent))
-from scenarios import SCENARIOS, build  # noqa: E402
+from scenarios import SCENARIOS, build, params_owners  # noqa: E402
 
 logging.getLogger('cmdstanpy').disabled = True
 FORK = 'rng' in inspect.signature(Prophet.predict).parameters
@@ -39,19 +40,32 @@ def test_default_is_stock_predict(fitted):
     pd.testing.assert_frame_equal(seeded(m).predict(future, **kwargs), ref)
 
 
+def _with_fixture_params(name, m):
+    """A copy of m with the fork's fitted params (Stan's fits differ across platforms)."""
+    m = copy.deepcopy(m)
+    for key, model in params_owners(m).items():
+        prefix = f'{name}/params/{key}/'
+        model.params = {k[len(prefix):]: FIXTURES[k] for k in FIXTURES.files if k.startswith(prefix)}
+    return m
+
+
 @pytest.mark.parametrize('mode', list(MODES))
 def test_seeded_matches_fork(fitted, mode):
     name, m, future, kwargs = fitted
+    if FORK:  # bit-identical to the fork's own predict, same model
+        fc = seeded(m).predict(future, history_uncertainty=MODES[mode], rng=np.random.default_rng(11), **kwargs)
+        ref = m.predict(future, history_uncertainty=MODES[mode], rng=np.random.default_rng(11), **kwargs)
+        pd.testing.assert_frame_equal(fc, ref)
+    # Against the fork's saved forecasts, with the fork's params: equal up to floating-point rounding
+    # (bit-identical on the machine that made the fixtures; BLAS/libm may differ in the last bits elsewhere).
+    m = _with_fixture_params(name, m)
     fc = seeded(m).predict(future, history_uncertainty=MODES[mode], rng=np.random.default_rng(11), **kwargs)
     for col in ['yhat_lower', 'yhat_upper', 'trend_lower', 'trend_upper']:
-        np.testing.assert_array_equal(fc[col].to_numpy(dtype=float), FIXTURES[f'{name}/{mode}/{col}'],
-                                      err_msg=f'{name}/{mode}/{col}')
+        np.testing.assert_allclose(fc[col].to_numpy(dtype=float), FIXTURES[f'{name}/{mode}/{col}'],
+                                   rtol=1e-9, atol=1e-9, err_msg=f'{name}/{mode}/{col}')
     # Everything else does not depend on the draws: equal to the default (stock) predict.
     other = [c for c in fc.columns if c not in ('yhat_lower', 'yhat_upper', 'trend_lower', 'trend_upper')]
     pd.testing.assert_frame_equal(fc[other], m.predict(future, **kwargs)[other])
-    if FORK:  # also directly against the fork's own predict
-        ref = m.predict(future, history_uncertainty=MODES[mode], rng=np.random.default_rng(11), **kwargs)
-        pd.testing.assert_frame_equal(fc, ref)
 
 
 def test_seeded_view_shares_state_and_leaves_model_alone():
