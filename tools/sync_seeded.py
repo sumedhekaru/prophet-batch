@@ -5,15 +5,16 @@ threads an rng through the sampling chain; this script copies those methods verb
 package's seeded predict is the fork's code, line for line. Regressor predictors (stock Prophet objects) are routed
 through the same mixin. Re-run after changing the fork, then run the package tests:
 
-    uv run python packages/prophet-batch/tools/sync_seeded.py [path/to/forecaster.py]
-    uv run python packages/prophet-batch/tools/sync_seeded.py --check   # exit 1 if _seeded.py is out of date
+    uv run python prophet-batch/tools/sync_seeded.py [path/to/forecaster.py]   # from the workspace
+    uv run python prophet-batch/tools/sync_seeded.py --check   # exit 1 if _seeded.py is out of date
 """
 
 import ast
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).parents[3]
+# The parallel-prophet workspace this repo is cloned into, next to prophet-dev.
+ROOT = Path(__file__).resolve().parents[2]
 FORK = ROOT / 'prophet-dev' / 'python' / 'prophet' / 'forecaster.py'
 OUT = Path(__file__).parents[1] / 'src' / 'prophet_batch' / '_seeded.py'
 

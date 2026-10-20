@@ -1,14 +1,13 @@
 # Guarantees and limitations
 
-What prophet-batch promises, the tolerance of each promise, and the test that checks it. Test paths are relative
-to the project repository (`tests/` = the project suite, which runs on stock PyPI prophet in CI;
-`packages/prophet-batch/tests/` = the package's own tests).
+What prophet-batch promises, the tolerance of each promise, and the test that checks it (paths relative to this
+repository; the suite runs on stock PyPI prophet in CI, Linux and macOS, Python 3.10–3.13).
 
 ## Same results as stock Prophet where nothing changes
 
 - **`prophet_batch.predict` with default arguments is bit-identical to `model.predict(df)`**, for every model
   kind (linear, multiplicative, logistic, flat, holidays + regressors, regressor predictors, non-vectorized).
-  `packages/prophet-batch/tests/test_predict.py::test_default_is_stock_predict`
+  `tests/test_predict.py::test_default_is_stock_predict`
 - **Series that are not batched are fit by `Prophet.fit`, with exactly its result** (logistic growth,
   `mcmc_samples > 0`, regressor predictors, and any series the batched solver rejects).
   `tests/test_fit_many.py::TestFallbackAndEdgeCases`, `tests/test_properties.py::test_fallback_and_constant_match_prophet_fit`
@@ -72,10 +71,10 @@ to the project repository (`tests/` = the project suite, which runs on stock PyP
 
 - **The seeded sampling is the fork's code**: `prophet_batch._seeded` is generated from the prophet-dev fork's
   `forecaster.py`, and its forecasts equal the fork's for the same seed in every scenario and history mode.
-  `packages/prophet-batch/tests/test_predict.py::test_seeded_matches_fork`,
-  `packages/prophet-batch/tests/test_predict.py::test_generated_module_is_in_sync_with_fork`
+  `tests/test_predict.py::test_seeded_matches_fork`,
+  `tests/test_predict.py::test_generated_module_is_in_sync_with_fork`
 - **Prophet is never modified**: seeded predictions use a subclass view of the model.
-  `packages/prophet-batch/tests/test_predict.py::test_seeded_view_shares_state_and_leaves_model_alone`
+  `tests/test_predict.py::test_seeded_view_shares_state_and_leaves_model_alone`
 
 ## Limitations
 
@@ -89,6 +88,6 @@ to the project repository (`tests/` = the project suite, which runs on stock PyP
   1.5× vs stock); use `n_jobs=1` there.
 - **Prophet subclasses that override `predict`**: `prophet_batch.predict` (and so `predict_many`) uses Prophet's
   predict logic with seeded sampling, not the override, and warns.
-  `packages/prophet-batch/tests/test_predict.py::test_subclass_predict_override_warns`
+  `tests/test_predict.py::test_subclass_predict_override_warns`
 - **`n_jobs != 1` uses the `spawn` start method**: `make_model` and `fit_kwargs` callables must be picklable
   (module-level functions).

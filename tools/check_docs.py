@@ -2,8 +2,8 @@
 public function and class has a docstring.
 
 Each Markdown file's ```python blocks run in order in one fresh namespace (so later snippets can use earlier
-ones). Test references look like `tests/test_x.py::test_name` (relative to the repository root, or to the
-package for `packages/prophet-batch/tests/...`); each file must exist and contain the test name.
+ones). Test references look like `tests/test_x.py::test_name` or `tests/test_x.py::TestClass`, relative to the
+repository root; each file must exist and contain the test.
 
     uv run --isolated --no-project --with prophet==1.5.0 --with-editable . python tools/check_docs.py
 """
@@ -15,10 +15,10 @@ import warnings
 from pathlib import Path
 
 PKG = Path(__file__).parents[1]
-REPO = PKG.parents[1]
+REPO = PKG
 DOCS = [PKG / 'README.md', *sorted((PKG / 'docs').glob('*.md'))]
 SNIPPET = re.compile(r'```python\n(.*?)```', re.S)
-TEST_REF = re.compile(r'`((?:packages/prophet-batch/)?tests/[\w/]+\.py)(?:::(\w+))?`')
+TEST_REF = re.compile(r'`(tests/[\w/]+\.py)(?:::(\w+))?`')
 # A reference names a test function or a test class: `tests/test_x.py::test_y` or `...::TestY`.
 
 

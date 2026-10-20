@@ -19,7 +19,7 @@ Status: in development (version 0.1.0.dev0, not yet on PyPI).
 ## Install
 
 ```sh
-pip install prophet-batch      # once published; until then: pip install ./packages/prophet-batch
+pip install prophet-batch      # once published; until then, from a clone of this repo: pip install .
 ```
 
 Requires Python ≥ 3.10 and `prophet>=1.5` (the stock PyPI wheel; no Stan build needed).

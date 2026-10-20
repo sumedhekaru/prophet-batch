@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Tests (PyPI prophet 1.5.0)
+        run: >
+          uv run --isolated --no-project --python ${{ matrix.python-version }}
+          --with prophet==1.5.0 --with pytest --with pytest-timeout --with-editable .
+          pytest -q -p no:cacheprovider
+      - name: Docs (snippets run, test references exist, docstrings)
+        run: >
+          uv run --isolated --no-project --python ${{ matrix.python-version }}
+          --with prophet==1.5.0 --with-editable . python tools/check_docs.py
+      - name: Wheel builds and installs
+        run: |
+          uv build
+          cd /tmp && uv run --isolated --no-project --python ${{ matrix.python-version }} \
+            --with prophet==1.5.0 --with "$GITHUB_WORKSPACE"/dist/*.whl \
+            python "$GITHUB_WORKSPACE"/tools/smoke.py
+
+  typecheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: pyrefly (upstream's version)
+        run: >
+          uv run --isolated --no-project --python 3.12 --with prophet==1.5.0 --with pyrefly==0.50.0
+          pyrefly check

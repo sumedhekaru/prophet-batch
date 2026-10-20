@@ -40,3 +40,4 @@ python-version = "3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+timeout = 600  # pytest-timeout; the property tests fit dozens of random models

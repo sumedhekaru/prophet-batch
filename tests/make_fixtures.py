@@ -1,6 +1,7 @@
 """Save the fork's seeded forecasts as fixtures (run in the dev env, where prophet is the prophet-dev fork).
 
-    PYTHONPATH=packages/prophet-batch/src uv run python packages/prophet-batch/tests/make_fixtures.py
+    # from the parallel-prophet workspace (prophet = the prophet-dev fork):
+    uv run python prophet-batch/tests/make_fixtures.py
 """
 
 import logging
@@ -11,7 +12,7 @@ import numpy as np
 from prophet import Prophet
 
 sys.path.insert(0, str(Path(__file__).parent))
-from scenarios import SCENARIOS, build, params_owners  # noqa: E402
+from predict_scenarios import SCENARIOS, build, params_owners  # noqa: E402
 
 MODES = {'true': True, 'false': False, 'analytic': 'analytic'}
 # The columns that depend on the random draws (the rest is checked against stock predict directly).

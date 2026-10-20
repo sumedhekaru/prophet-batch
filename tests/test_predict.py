@@ -16,7 +16,7 @@ from prophet_batch import predict
 from prophet_batch._seeded import seeded
 
 sys.path.insert(0, str(Path(__file__).parent))
-from scenarios import SCENARIOS, build, params_owners  # noqa: E402
+from predict_scenarios import SCENARIOS, build, params_owners  # noqa: E402
 
 logging.getLogger('cmdstanpy').disabled = True
 FORK = 'rng' in inspect.signature(Prophet.predict).parameters
@@ -84,7 +84,7 @@ def test_errors():
         seeded(m).predict(future, history_uncertainty='x')
 
 
-FORK_SOURCE = Path(__file__).parents[3] / 'prophet-dev' / 'python' / 'prophet' / 'forecaster.py'
+FORK_SOURCE = Path(__file__).resolve().parents[2] / 'prophet-dev' / 'python' / 'prophet' / 'forecaster.py'
 
 
 @pytest.mark.skipif(not FORK_SOURCE.exists(), reason='prophet-dev checkout not available')
