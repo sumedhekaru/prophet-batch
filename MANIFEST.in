@@ -1,0 +1,2 @@
+recursive-include tests *.py *.npz
+recursive-include tools *.py
