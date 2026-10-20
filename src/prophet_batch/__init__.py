@@ -9,6 +9,9 @@ from __future__ import annotations
 
 __version__ = '0.1.0.dev0'
 
+from prophet_batch.batch import (  # noqa: E402
+    cross_validation_many, fit_many, predict_many, series_rng,
+)
 from prophet_batch.predict import predict  # noqa: E402
 
-__all__ = ['predict']
+__all__ = ['cross_validation_many', 'fit_many', 'predict', 'predict_many', 'series_rng']
