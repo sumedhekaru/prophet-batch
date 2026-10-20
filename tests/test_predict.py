@@ -92,3 +92,17 @@ def test_generated_module_is_in_sync_with_fork():
     script = Path(__file__).parents[1] / 'tools' / 'sync_seeded.py'
     out = subprocess.run([sys.executable, str(script), '--check'], capture_output=True, text=True)
     assert out.returncode == 0, out.stdout + out.stderr
+
+
+class _ClippedProphet(Prophet):
+    def predict(self, df=None, vectorized=True):
+        fc = super().predict(df, vectorized)
+        fc['yhat'] = fc['yhat'].clip(lower=0)
+        return fc
+
+
+def test_subclass_predict_override_warns():
+    m, df, _ = SCENARIOS['short'](_ClippedProphet)
+    m.fit(df)
+    with pytest.warns(UserWarning, match='_ClippedProphet overrides predict'):
+        predict(m, m.make_future_dataframe(5), rng=np.random.default_rng(0))

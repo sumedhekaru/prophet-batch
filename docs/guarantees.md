@@ -33,8 +33,11 @@ to the project repository (`tests/` = the project suite, which runs on stock PyP
 - **No degenerate fits**: a series that can be fit exactly (no finite MAP; sigma would reach 0) goes to
   `Prophet.fit`. `tests/test_properties.py::test_accepted_fits_have_sigma_above_floor`,
   `tests/test_fit_many.py::TestFallbackAndEdgeCases`
-- **One bad series never aborts the call**: a solver failure is isolated to its series.
+- **One bad series never aborts the call**: a solver failure (singular system, non-finite or unconverged
+  solution) is isolated to its series, which is fit by `Prophet.fit`, on the additive and multiplicative paths.
   `tests/test_fit_many.py::TestSolverFailures`
+- **Input problems raise up front, the same way for any `n_jobs`**: missing `ds`/`y` columns (Prophet's own error),
+  rows without a series id, an invalid Prophet configuration. `tests/test_fit_many.py::TestInputValidation`
 
 ## Reproducibility
 
@@ -84,5 +87,8 @@ to the project repository (`tests/` = the project suite, which runs on stock PyP
   Stan's approximation of it; the log posterior is never lower.
 - **Small workloads**: with few short series, worker start-up dominates (Tourism Monthly, 366 series of ~300 rows:
   1.5× vs stock); use `n_jobs=1` there.
+- **Prophet subclasses that override `predict`**: `prophet_batch.predict` (and so `predict_many`) uses Prophet's
+  predict logic with seeded sampling, not the override, and warns.
+  `packages/prophet-batch/tests/test_predict.py::test_subclass_predict_override_warns`
 - **`n_jobs != 1` uses the `spawn` start method**: `make_model` and `fit_kwargs` callables must be picklable
   (module-level functions).

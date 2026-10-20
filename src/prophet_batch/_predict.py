@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import inspect
+import warnings
 from typing import TYPE_CHECKING, Any, Literal
 
 from prophet_batch._seeded import seeded
@@ -47,9 +48,21 @@ def predict(
         with None and history_uncertainty=True the result is bit-identical to
         model.predict(df, vectorized).
 
+    A Prophet subclass that overrides predict (without the rng and history_uncertainty
+    arguments) gets Prophet's own predict logic here, not its override; a warning says so.
+
     Returns
     -------
     A pd.DataFrame with the forecast components, as Prophet.predict returns.
     """
-    target: Any = model if has_native_hooks(model) else seeded(model)
+    if has_native_hooks(model):
+        native: Any = model  # stock Prophet's type has no rng / history_uncertainty
+        return native.predict(df, vectorized, history_uncertainty=history_uncertainty, rng=rng)
+    from prophet import Prophet
+
+    if type(model).predict is not Prophet.predict:
+        warnings.warn(
+            f'{type(model).__name__} overrides predict; prophet_batch uses Prophet\'s predict '
+            'logic (with seeded sampling) instead of the override.', stacklevel=2)
+    target: Any = seeded(model)
     return target.predict(df, vectorized, history_uncertainty=history_uncertainty, rng=rng)

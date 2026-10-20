@@ -580,10 +580,19 @@ def _series_failed(sid: Hashable, e: Exception, on_error: str) -> None:
     traceback are kept.
     """
     if on_error == 'raise':
-        first = e.args[0] if e.args else ''
-        e.args = (f'series {sid!r}: {first}',) + tuple(e.args[1:])
+        if len(e.args) <= 1 and not isinstance(e, KeyError):
+            first = e.args[0] if e.args else ''
+            e.args = (f'series {sid!r}: {first}',)
+        else:
+            # Structured args (e.g. OSError's errno, KeyError's key) are left intact.
+            logger.error('fit_many: series %r failed: %s: %s', sid, type(e).__name__, e)
     else:
         logger.warning('fit_many: skipping series %r: %s: %s', sid, type(e).__name__, e)
+
+
+def _resolve_n_jobs(n_jobs: int) -> int:
+    """Worker count: -1 means every CPU, anything below 1 means 1."""
+    return (os.cpu_count() or 1) if n_jobs == -1 else max(1, int(n_jobs))
 
 
 def _no_fit_kwargs(series_id: Hashable) -> dict[str, Any]:
@@ -677,11 +686,9 @@ def _fit_chunk(
     fit_kwargs: _FitKwargs,
 ) -> dict[Hashable, Prophet]:
     """Worker for fit_many(n_jobs > 1): fit one chunk of series in this process."""
-    if make_model is None:
-        return fit_many(chunk_df, id_col=id_col, on_error=on_error, fit_kwargs=fit_kwargs,
-                        **prophet_kwargs)
+    # prophet_kwargs is empty when make_model is given (fit_many checks).
     return fit_many(chunk_df, id_col=id_col, make_model=make_model, on_error=on_error,
-                    fit_kwargs=fit_kwargs)
+                    fit_kwargs=fit_kwargs, **prophet_kwargs)
 
 
 def _split_stan_series(
@@ -828,7 +835,15 @@ def fit_many(
             return fixed
     else:
         raise ValueError('fit_kwargs must be a dict or a callable series_id -> dict.')
-    n_jobs = (os.cpu_count() or 1) if n_jobs == -1 else max(1, int(n_jobs))
+    if ('ds' not in df) or ('y' not in df):
+        raise ValueError('Dataframe must have columns "ds" and "y" with the dates and '
+                         'values respectively.')
+    n_missing = int(df[id_col].isna().sum())
+    if n_missing:
+        raise ValueError(f'{n_missing} rows have a missing {id_col}; give every row a series id.')
+    if make_model is None:
+        Prophet(**prophet_kwargs)  # invalid configuration: raise now, for any n_jobs
+    n_jobs = _resolve_n_jobs(n_jobs)
     if n_jobs > 1:
         return _fit_many_parallel(df, id_col, make_model, n_jobs, prophet_kwargs, on_error,
                                   fit_kwargs)
@@ -837,8 +852,6 @@ def fit_many(
     if make_model is None:
         def make_model(series_id: Hashable) -> Prophet:
             return Prophet(**prophet_kwargs)
-    elif prophet_kwargs:
-        raise ValueError('Pass either make_model or Prophet keyword arguments, not both.')
 
     order, batch, mult, constant, fallback, skipped = _prepare(
         df, id_col, make_model, share_dates, on_error, kwargs_for)
@@ -851,16 +864,13 @@ def fit_many(
     rejected_add = rejected_mult = 0
     for group in _group_by(batch, lambda item: (len(item[2].t_change), item[2].K)):
         problems = [(Z, inputs.y, inputs.sigmas, inputs.tau) for _, _, inputs, Z, _ in group]
-        layout, G, C, yy, T, ridge, l1, tau = stack_problems(problems)
-        w, sigma = solve_map(G, C, yy, T, ridge, l1, tau)
-        lp = log_posterior(G, C, yy, T, w, sigma, ridge, l1, tau)
-        for b, (sid, model, _, _, series_df) in enumerate(group):
-            if sigma[b] <= _MIN_SIGMA:
-                fallback.append((sid, series_df, _PERFECT_FIT))
+        for (sid, model, _, _, series_df), res in zip(group, _solve_additive(problems)):
+            if isinstance(res, str):
+                fallback.append((sid, series_df, res))
                 rejected_add += 1
                 continue
-            k, m, delta, beta = layout.unpack(w[b], b)
-            set_params(model, k, m, delta, beta, sigma[b], lp[b])
+            k, m, delta, beta, sigma_obs, lp_b = res
+            set_params(model, k, m, delta, beta, sigma_obs, lp_b)
             models[sid] = model
 
     # Multiplicative models: the design changes every iteration, so the solver needs each
@@ -1093,6 +1103,47 @@ def solve_map_multiplicative(
         if live.size == 0:
             break
     return theta, ba, bm, sigma, lp, it
+
+
+def _solve_additive(
+    problems: Sequence[tuple[np.ndarray, Any, Sequence[float], float]],
+) -> list[tuple[float, float, np.ndarray, np.ndarray, float, float] | str]:
+    """Solve a group of equal-shape additive problems, isolating failures.
+
+    As in _solve_multiplicative: if the batched solve raises LinAlgError, each series
+    is solved alone (same result as in the batch, since the shapes are equal). A
+    solution is accepted only if it is finite and sigma_obs is above its floor (see
+    _PERFECT_FIT).
+
+    Parameters
+    ----------
+    problems: (Z, y, sigmas, tau) per series, as for stack_problems.
+
+    Returns
+    -------
+    Per series: (k, m, delta, beta, sigma_obs, lp), or a string saying why it failed.
+    """
+    layout, G, C, yy, T, ridge, l1, tau = stack_problems(problems)
+    try:
+        w, sigma = solve_map(G, C, yy, T, ridge, l1, tau)
+    except np.linalg.LinAlgError as e:
+        if len(problems) == 1:
+            return [f'additive solver failed: {e}']
+        logger.debug('Additive group of %d series failed (%s); solving them one at a time',
+                     len(problems), e)
+        return [r for problem in problems for r in _solve_additive([problem])]
+    lp = log_posterior(G, C, yy, T, w, sigma, ridge, l1, tau)
+    out: list[tuple[float, float, np.ndarray, np.ndarray, float, float] | str] = []
+    for b in range(len(problems)):
+        if not (np.isfinite(sigma[b]) and np.isfinite(lp[b]) and np.isfinite(w[b]).all()):
+            out.append('additive solver returned a non-finite solution')
+            continue
+        if sigma[b] <= _MIN_SIGMA:
+            out.append(_PERFECT_FIT)
+            continue
+        k, m, delta, beta = layout.unpack(w[b], b)
+        out.append((k, m, delta, beta, float(sigma[b]), float(lp[b])))
+    return out
 
 
 def _solve_multiplicative(
@@ -1364,7 +1415,7 @@ def predict_many(
                                                    include_history=include_history))
         items.append((sid, model, future))
 
-    n_jobs = (os.cpu_count() or 1) if n_jobs == -1 else max(1, int(n_jobs))
+    n_jobs = _resolve_n_jobs(n_jobs)
     if n_jobs == 1 or len(items) <= 1:
         results = _predict_chunk(items, seed, history_uncertainty)
     else:
@@ -1428,7 +1479,7 @@ def _cv_plan(
             raise ValueError('Maximum cutoff value is greater than end date minus horizon, no '
                              'value for cross-validation remaining')
         initial_td = cutoffs[0] - df['ds'].min()
-        cuts = list(cutoffs)
+        cuts = [pd.Timestamp(c) for c in cutoffs]  # also datetime / np.datetime64, as stock
     if initial_td < seasonality_dt:
         logger.warning('Seasonality has period of %s days which is larger than initial window. '
                        'Consider increasing initial.', period_max)
@@ -1571,7 +1622,7 @@ def cross_validation_many(
         seed = cast(int, np.random.SeedSequence().entropy)
         logger.info('cross_validation_many: no seed given, using seed=%d', seed)
     horizon_td = pd.Timedelta(horizon)
-    n_jobs = (os.cpu_count() or 1) if n_jobs == -1 else max(1, int(n_jobs))
+    n_jobs = _resolve_n_jobs(n_jobs)
     items = list(models.items())
     results: dict[Hashable, pd.DataFrame] = {}
     if n_jobs == 1 or len(items) <= 1:
