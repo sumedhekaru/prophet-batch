@@ -145,7 +145,7 @@ def main():
     args = [a for a in sys.argv[1:] if a != '--check']
     check = '--check' in sys.argv[1:]
     fork = Path(args[0]) if args else FORK
-    text = fork.read_text()
+    text = fork.read_text(encoding='utf-8')
     lines = text.splitlines(keepends=True)
     cls = next(n for n in ast.parse(text).body if isinstance(n, ast.ClassDef) and n.name == 'Prophet')
     found = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
@@ -163,11 +163,11 @@ def main():
         source = fork
     text = HEADER.format(source=source) + body + FOOTER
     if check:
-        if OUT.read_text() != text:
+        if OUT.read_text(encoding='utf-8') != text:
             raise SystemExit(f'{OUT} is out of date with {fork}: re-run tools/sync_seeded.py')
         print(f'{OUT.name} is up to date with {fork}')
         return
-    OUT.write_text(text)
+    OUT.write_text(text, encoding='utf-8')
     print(f'wrote {OUT} ({len(METHODS)} methods from {fork})')
 
 

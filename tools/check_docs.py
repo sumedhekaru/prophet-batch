@@ -46,7 +46,7 @@ def main():
     warnings.simplefilter('ignore')
     problems = []
     for doc in DOCS:
-        text = doc.read_text()
+        text = doc.read_text(encoding='utf-8')
         namespace = {'__name__': '__docs__'}
         for i, code in enumerate(SNIPPET.findall(text), 1):
             try:
@@ -57,8 +57,10 @@ def main():
             f = REPO / path
             if not f.exists():
                 problems.append(f'{doc.name}: {path} does not exist')
-            elif name and f'def {name}(' not in f.read_text() and f'class {name}' not in f.read_text():
-                problems.append(f'{doc.name}: {path} has no {name}')
+            elif name:
+                source = f.read_text(encoding='utf-8')
+                if f'def {name}(' not in source and f'class {name}' not in source:
+                    problems.append(f'{doc.name}: {path} has no {name}')
         print(f'{doc.relative_to(PKG)}: {len(SNIPPET.findall(text))} snippets, '
               f'{len(TEST_REF.findall(text))} test references')
     problems += missing_docstrings()
