@@ -12,14 +12,16 @@ Fit and forecast many [Prophet](https://github.com/facebook/prophet) models at o
 
 Measured against stock Prophet 1.5.0 on the same 10 workers (fit + forecast, six public datasets, 38,905 series):
 the same holdout accuracy, and 1.5× (short series) to 26.5× (M4 Daily) faster with full history intervals.
-Benchmarks, method and guarantees: see [docs/guarantees.md](docs/guarantees.md) and the project repository.
+Guarantees and how they are tested: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md). Runnable use cases with accuracy
+and speed against stock Prophet on macOS, Windows, Linux (Docker), Cloud Run and Spark (Dataproc):
+[prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples).
 
-Status: in development (version 0.1.0.dev0, not yet on PyPI).
+Status: alpha (0.1.0): the public API (below) is stable in intent but may still change before 1.0.
 
 ## Install
 
 ```sh
-pip install prophet-batch      # once published; until then, from a clone of this repo: pip install .
+pip install prophet-batch
 ```
 
 Requires Python ≥ 3.10 and `prophet>=1.5` (the stock PyPI wheel; no Stan build needed).
@@ -159,8 +161,8 @@ between releases.
   fits a little tighter than Stan's L-BFGS, which stops short of the optimum.
 - With few, short series, process start-up dominates: use `n_jobs=1` there.
 
-More: [docs/guarantees.md](docs/guarantees.md) (what is guaranteed and how it is tested) and
-[docs/migration.md](docs/migration.md) (from a stock loop or process pool).
+More: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md) (what is guaranteed and how it is tested) and
+[docs/migration.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/migration.md) (from a stock loop or process pool).
 
 ## License
 

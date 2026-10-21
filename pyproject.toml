@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prophet-batch"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Fit and forecast many Prophet models at once: batched exact MAP fits, seeded parallel forecasts."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +30,12 @@ classifiers = [
   "Topic :: Scientific/Engineering",
   "Topic :: Scientific/Engineering :: Mathematics",
 ]
+
+[project.urls]
+Homepage = "https://github.com/sumedhekaru/prophet-batch"
+Documentation = "https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md"
+Examples = "https://github.com/sumedhekaru/prophet-batch-examples"
+Issues = "https://github.com/sumedhekaru/prophet-batch/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
