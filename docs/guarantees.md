@@ -1,8 +1,7 @@
 # Guarantees and limitations
 
 What prophet-batch promises, the tolerance of each promise, and the test that checks it (paths relative to this
-repository; the suite runs on stock PyPI prophet in CI on Linux and macOS, Python 3.10–3.13; CI is started by hand
-at milestones such as releases).
+repository; the suite runs on stock PyPI prophet in CI on Linux and macOS, Python 3.10–3.13, on every push to main).
 
 ## Same results as stock Prophet where nothing changes
 
