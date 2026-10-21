@@ -1,11 +1,15 @@
 name: CI
 
+# Manual only (private repo: macOS minutes count 10x). Run at milestones, e.g. before a release:
+#   gh workflow run CI                      # Linux, Python 3.10-3.13, + type check
+#   gh workflow run CI -f macos=true        # also macOS
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      macos:
+        description: Also test on macOS (billed at 10x on private repos)
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -13,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: ${{ fromJSON(inputs.macos && '["ubuntu-24.04", "macos-15"]' || '["ubuntu-24.04"]') }}
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     timeout-minutes: 60
     steps:
