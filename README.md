@@ -96,6 +96,9 @@ intervals on history rows, which are most of the cost when the history is includ
 | `"analytic"` (MAP fits) | exact closed form: the limit of the sampled intervals | sampled, as with `False` | ≈ `False` |
 | `False` | NaN | sampled (identical to predicting the future rows alone) | fastest |
 
+`yhat` is the same in every mode. The future rows' intervals are equally valid draws in each mode, but not the same
+numbers between `True` and the other two: with `True` the series' random stream is first used for the history rows.
+
 ```python
 forecasts = predict_many(models, periods=28, seed=42, history_uncertainty="analytic")
 ```

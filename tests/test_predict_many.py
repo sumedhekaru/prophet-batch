@@ -229,3 +229,38 @@ class TestColumns:
     def test_invalid_columns(self, models, bad):
         with pytest.raises(ValueError, match="columns must be"):
             predict_many(models, periods=7, seed=1, columns=bad)
+
+
+WORKER_SCRIPT = '''
+import prophet_batch
+import pandas as pd
+from synthetic import make_series
+
+
+def main():
+    long = pd.concat([make_series(n_days=200, seed=i).assign(unique_id=f"s{i}") for i in range(4)])
+    models = prophet_batch.fit_many(long)
+    prophet_batch.predict_many(models, periods=3, seed=0, n_jobs=2)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def test_plotly_message_not_repeated_by_workers(tmp_path):
+    """F3.5: stock Prophet logs a missing plotly at import; worker processes don't repeat it."""
+    import importlib.util
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if importlib.util.find_spec("plotly") is not None:
+        pytest.skip("plotly is installed: Prophet logs nothing")
+    script = tmp_path / "run.py"
+    script.write_text(WORKER_SCRIPT)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(Path(__file__).parent), os.environ.get("PYTHONPATH", "")])}
+    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, timeout=300)
+    assert out.returncode == 0, out.stderr
+    assert out.stderr.count("Importing plotly failed") == 1, out.stderr  # the parent's, once
