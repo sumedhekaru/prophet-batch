@@ -70,9 +70,9 @@ def test_n_jobs_1_runs_in_process(models, monkeypatch):
     calls = []
     original = pb._predict_chunk
 
-    def spy(items, seed, hu):
+    def spy(items, *args):
         calls.append(len(items))
-        return original(items, seed, hu)
+        return original(items, *args)
 
     monkeypatch.setattr(pb, "_predict_chunk", spy)
     pb.predict_many(models, periods=7, seed=1, n_jobs=1)
@@ -195,3 +195,37 @@ class TestFeatureCache:
         m = Custom()
         assert cache.attach(m) is m
         assert type(cache.attach(Prophet())) is not Prophet
+
+
+class TestColumns:
+    """F4.1a: columns= keeps only the given forecast columns."""
+
+    KEEP = ["ds", "yhat", "yhat_lower", "yhat_upper"]
+
+    @pytest.mark.parametrize("n_jobs", [1, 2])
+    def test_subset_of_full_forecast(self, mixed, n_jobs):
+        models, futures = mixed
+        full = predict_many(models, futures=futures, seed=3, history_uncertainty="analytic")
+        slim = predict_many(models, futures=futures, seed=3, history_uncertainty="analytic", columns=self.KEEP,
+                            n_jobs=n_jobs)
+        assert list(slim) == list(full)
+        for sid in models:
+            pd.testing.assert_frame_equal(slim[sid], full[sid][self.KEEP], check_exact=True)
+            assert slim[sid].attrs["seed"] == 3
+
+    def test_single_name_and_default(self, models):
+        one = predict_many(models, periods=7, seed=1, columns="yhat")
+        default = predict_many(models, periods=7, seed=1)
+        for sid in models:
+            assert list(one[sid].columns) == ["yhat"]
+            pd.testing.assert_series_equal(one[sid]["yhat"], default[sid]["yhat"])
+        assert "trend" in default["s0"].columns  # None keeps Prophet's full frame
+
+    def test_missing_column_names_the_series(self, models):
+        with pytest.raises(ValueError, match=r"series 's0'.*\['nope'\]"):
+            predict_many(models, periods=7, seed=1, columns=["yhat", "nope"])
+
+    @pytest.mark.parametrize("bad", [[], ["yhat", 3]])
+    def test_invalid_columns(self, models, bad):
+        with pytest.raises(ValueError, match="columns must be"):
+            predict_many(models, periods=7, seed=1, columns=bad)

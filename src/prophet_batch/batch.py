@@ -1535,19 +1535,34 @@ def _cached_features(self: Prophet, df: pd.DataFrame) -> Any:
     return self.__dict__['_feature_cache'].features(self, df)
 
 
+def _select_columns(
+    sid: Hashable, forecast: pd.DataFrame, columns: list[str] | None
+) -> pd.DataFrame:
+    """The forecast, or only the given columns of it."""
+    if columns is None:
+        return forecast
+    missing = [c for c in columns if c not in forecast.columns]
+    if missing:
+        raise ValueError(f'series {sid!r}: the forecast has no column(s) {missing}.')
+    return forecast[columns]
+
+
 def _predict_chunk(
     items: Sequence[tuple[Hashable, Prophet, pd.DataFrame]],
     seed: int,
     history_uncertainty: bool | Literal['analytic'],
+    columns: list[str] | None = None,
 ) -> list[tuple[Hashable, pd.DataFrame]]:
     """Worker: predict a list of (series_id, model, future) with per-series generators.
 
-    Models with the same configuration and future share their feature matrices.
+    Models with the same configuration and future share their feature matrices; with
+    columns, only those forecast columns are kept (and sent back).
     """
     cache = _FeatureCache()
     return [
-        (sid, predict(cache.attach(model), future, history_uncertainty=history_uncertainty,
-                      rng=series_rng(seed, sid)))
+        (sid, _select_columns(sid, predict(
+            cache.attach(model), future, history_uncertainty=history_uncertainty,
+            rng=series_rng(seed, sid)), columns))
         for sid, model, future in items
     ]
 
@@ -1561,6 +1576,7 @@ def predict_many(
     seed: int | None = None,
     n_jobs: int = 1,
     history_uncertainty: bool | Literal['analytic'] = True,
+    columns: str | Sequence[str] | None = None,
 ) -> dict[Hashable, pd.DataFrame]:
     """Forecast many fitted models, reproducibly, optionally in parallel.
 
@@ -1577,6 +1593,10 @@ def predict_many(
         which is logged and stored in every forecast's `attrs['seed']`.
     n_jobs: Number of worker processes; 1 runs in this process, -1 uses all CPUs.
     history_uncertainty: Passed to prophet_batch.predict (True, False or 'analytic').
+    columns: Optional forecast column name(s) to keep, e.g. ['ds', 'yhat', 'yhat_lower',
+        'yhat_upper']. Workers drop the other columns before sending results back,
+        which saves memory and time when models have many components (holidays,
+        regressors). None (the default) returns Prophet's full forecast frame.
 
     Returns
     -------
@@ -1584,6 +1604,9 @@ def predict_many(
     """
     if (futures is None) == (periods is None):
         raise ValueError('Pass exactly one of futures or periods.')
+    keep = [columns] if isinstance(columns, str) else None if columns is None else list(columns)
+    if keep is not None and (not keep or not all(isinstance(c, str) for c in keep)):
+        raise ValueError('columns must be a column name or a non-empty list of names.')
     if seed is None:
         # Without arguments, SeedSequence draws a fresh int.
         seed = cast(int, np.random.SeedSequence().entropy)
@@ -1597,7 +1620,7 @@ def predict_many(
 
     n_jobs = _resolve_n_jobs(n_jobs)
     if n_jobs == 1 or len(items) <= 1:
-        results = _predict_chunk(items, seed, history_uncertainty)
+        results = _predict_chunk(items, seed, history_uncertainty, keep)
     else:
         from concurrent.futures import ProcessPoolExecutor
         import multiprocessing
@@ -1607,7 +1630,7 @@ def predict_many(
         ctx = multiprocessing.get_context('spawn')
         with ProcessPoolExecutor(max_workers=n_jobs, mp_context=ctx) as pool:
             parts = pool.map(_predict_chunk, chunks, [seed] * n_chunks,
-                             [history_uncertainty] * n_chunks)
+                             [history_uncertainty] * n_chunks, [keep] * n_chunks)
             results = [r for part in parts for r in part]
     forecasts = dict(results)
     for fc in forecasts.values():
