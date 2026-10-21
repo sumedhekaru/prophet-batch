@@ -28,7 +28,8 @@ import logging
 import os
 import pickle
 from collections import OrderedDict
-from copy import deepcopy
+from copy import copy, deepcopy
+from inspect import getattr_static
 from typing import (
     TYPE_CHECKING, Any, Callable, Hashable, Iterable, Literal, Mapping, Sequence, TypeVar,
     cast,
@@ -1438,14 +1439,114 @@ def series_rng(seed: int, series_id: Hashable) -> np.random.Generator:
         np.random.SeedSequence(seed, spawn_key=(stable_id_hash(series_id),)))
 
 
+# The Prophet methods that build features, and the model attributes they read:
+# make_all_seasonality_features's result depends only on these and on the frame.
+_FEATURE_METHODS = (
+    'make_all_seasonality_features', 'make_seasonality_features', 'fourier_series',
+    'construct_holiday_dataframe', 'make_holiday_features', 'regressor_column_matrix',
+    'add_group_component',
+)
+_FEATURE_ATTRS = (
+    'seasonalities', 'holidays', 'country_holidays', 'train_holiday_names',
+    'holidays_prior_scale', 'holidays_mode', 'extra_regressors', 'train_component_cols',
+)
+# Most distinct model configurations kept per frame key in one worker (0 disables reuse).
+_MAX_FEATURE_ENTRIES = 16
+# Prophet class -> its subclass that builds features through a _FeatureCache.
+_CACHING_CLASSES: dict[type, type] = {}
+
+
+def _frame_key(model: Prophet, df: pd.DataFrame) -> bytes | None:
+    """Identifies what the features read from df: dates, index, and the condition and
+    regressor columns. None (do not reuse) for anything unusual.
+    """
+    cols = list(model.extra_regressors) + [
+        props['condition_name'] for props in model.seasonalities.values()
+        if props['condition_name'] is not None
+    ]
+    h = hashlib.sha256()
+    try:
+        h.update(df['ds'].to_numpy(dtype='datetime64[ns]').tobytes())
+        h.update(np.asarray(df.index, dtype=np.int64).tobytes())
+        for col in cols:
+            h.update(f'\0{col}\0{df[col].dtype}\0'.encode())
+            h.update(np.ascontiguousarray(df[col].to_numpy(dtype=float)).tobytes())
+    except (KeyError, TypeError, ValueError):
+        return None
+    return h.digest()
+
+
+class _FeatureCache:
+    """Reuses make_all_seasonality_features results between models in one worker.
+
+    Prophet's predict builds the features twice per series (components, then
+    uncertainty), and they are the same for every series with the same configuration
+    and future dates. Its callers only read the result, so one copy can serve them all.
+    """
+
+    def __init__(self) -> None:
+        self.entries: dict[bytes, list[tuple[dict[str, Any], Any]]] = {}
+
+    def attach(self, model: Prophet) -> Prophet:
+        """A shallow copy of model that builds its features through this cache (or the
+        model itself when its class changes how features are built).
+        """
+        from prophet import Prophet
+
+        cls = type(model)
+        if (_MAX_FEATURE_ENTRIES <= 0
+                or any(getattr_static(cls, m) is not getattr_static(Prophet, m)
+                       for m in _FEATURE_METHODS)
+                or any(m in vars(model) for m in _FEATURE_METHODS)):
+            return model
+        if cls not in _CACHING_CLASSES:
+            _CACHING_CLASSES[cls] = type(cls.__name__, (cls,), {
+                'make_all_seasonality_features': _cached_features,
+                '__module__': cls.__module__,
+            })
+        view = copy(model)
+        view.__class__ = _CACHING_CLASSES[cls]
+        view.__dict__['_feature_cache'] = self
+        return view
+
+    def features(self, model: Prophet, df: pd.DataFrame) -> Any:
+        key = _frame_key(model, df)
+        if key is None:
+            return _build_features(model, df)
+        config = {a: getattr(model, a) for a in _FEATURE_ATTRS}
+        entries = self.entries.setdefault(key, [])
+        for cfg, result in entries:
+            if _same(cfg, config):
+                return result
+        result = _build_features(model, df)
+        if len(entries) < _MAX_FEATURE_ENTRIES:
+            entries.append((config, result))
+        return result
+
+
+def _build_features(model: Prophet, df: pd.DataFrame) -> Any:
+    from prophet import Prophet
+
+    return Prophet.make_all_seasonality_features(model, df)
+
+
+def _cached_features(self: Prophet, df: pd.DataFrame) -> Any:
+    """make_all_seasonality_features of models attached to a _FeatureCache."""
+    return self.__dict__['_feature_cache'].features(self, df)
+
+
 def _predict_chunk(
     items: Sequence[tuple[Hashable, Prophet, pd.DataFrame]],
     seed: int,
     history_uncertainty: bool | Literal['analytic'],
 ) -> list[tuple[Hashable, pd.DataFrame]]:
-    """Worker: predict a list of (series_id, model, future) with per-series generators."""
+    """Worker: predict a list of (series_id, model, future) with per-series generators.
+
+    Models with the same configuration and future share their feature matrices.
+    """
+    cache = _FeatureCache()
     return [
-        (sid, predict(model, future, history_uncertainty=history_uncertainty,
+        (sid, predict(cache.attach(model), future, history_uncertainty=history_uncertainty,
                       rng=series_rng(seed, sid)))
         for sid, model, future in items
     ]

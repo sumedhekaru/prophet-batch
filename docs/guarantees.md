@@ -14,6 +14,9 @@ repository; the suite runs on stock PyPI prophet in CI, Linux and macOS, Python 
 - **The stock API works on fitted models**: all 41 model-dependent public callables of prophet 1.5.0 (predict,
   sampling, plots, cross-validation, metrics, serialization, utilities) give output bit-identical to a stock model
   holding the same parameters. `tests/test_api_parity.py::test_api_matches_stock`
+- **Shared work does not change results**: series with identical models, dates and regressor values share their
+  preprocessing in `fit_many` and their feature matrices in `predict_many`; fits and forecasts are bit-identical to
+  doing it per series. `tests/test_fit_many.py::TestSharedDates`, `tests/test_predict_many.py::TestFeatureCache`
 - **Invalid series behave as in `Prophet.fit`**: the same error (with the series id in the message), or, with
   `on_error="skip"`, the series is left out with a warning. `tests/test_edge_cases.py::test_same_behavior_as_prophet_fit`,
   `tests/test_fit_many.py::TestOnError`
