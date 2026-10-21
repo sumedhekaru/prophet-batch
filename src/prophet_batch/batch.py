@@ -658,9 +658,43 @@ def _series_failed(sid: Hashable, e: Exception, on_error: str) -> None:
         logger.warning('fit_many: skipping series %r: %s: %s', sid, type(e).__name__, e)
 
 
+def _cgroup_cpu_limit(root: str = '/sys/fs/cgroup') -> int | None:
+    """CPUs allowed by the cgroup CPU quota (v2 cpu.max or v1 CFS), rounded up; None
+    when there is no quota or it can't be read.
+    """
+    try:
+        with open(os.path.join(root, 'cpu.max')) as f:
+            quota, period = f.read().split()[:2]
+    except (OSError, ValueError):
+        try:
+            with open(os.path.join(root, 'cpu', 'cpu.cfs_quota_us')) as f:
+                quota = f.read().strip()
+            with open(os.path.join(root, 'cpu', 'cpu.cfs_period_us')) as f:
+                period = f.read().strip()
+        except OSError:
+            return None
+    try:
+        q, p = int(quota), int(period)
+    except ValueError:  # 'max': no quota
+        return None
+    if q <= 0 or p <= 0:  # v1 reports -1 for no quota
+        return None
+    return max(1, -(-q // p))
+
+
+def _available_cpus() -> int:
+    """CPUs this process may use: the affinity set, capped by a container CPU quota
+    (Docker --cpus, Kubernetes limits, Cloud Run), which os.cpu_count() ignores.
+    """
+    sched_getaffinity = getattr(os, 'sched_getaffinity', None)
+    n = len(sched_getaffinity(0)) if sched_getaffinity is not None else (os.cpu_count() or 1)
+    limit = _cgroup_cpu_limit()
+    return max(1, min(n, limit) if limit is not None else n)
+
+
 def _resolve_n_jobs(n_jobs: int) -> int:
-    """Worker count: -1 means every CPU, anything below 1 means 1."""
-    return (os.cpu_count() or 1) if n_jobs == -1 else max(1, int(n_jobs))
+    """Worker count: -1 means every available CPU, anything below 1 means 1."""
+    return _available_cpus() if n_jobs == -1 else max(1, int(n_jobs))
 
 
 def _no_fit_kwargs(series_id: Hashable) -> dict[str, Any]:
@@ -880,7 +914,7 @@ def fit_many(
         seasonalities). It must return a fresh object on every call; it may be called
         more than once per series. Defaults to `Prophet(**prophet_kwargs)`.
     n_jobs: Number of worker processes; 1 (default) runs in this process, -1 uses all
-        CPUs. The series are split into contiguous chunks, each fit like n_jobs=1, so
+        available CPUs (respecting a container's CPU limit). The series are split into contiguous chunks, each fit like n_jobs=1, so
         results are bit-identical for any n_jobs. With n_jobs != 1, make_model must be
         picklable (a module-level function, not a lambda or closure).
     on_error: What to do when a series can't be fit (e.g. fewer than 2 non-NaN rows).
@@ -1591,7 +1625,8 @@ def predict_many(
         series' forecast depends only on (seed, series id, model, future): not on
         n_jobs, order, or which other series are predicted. None draws a fresh seed,
         which is logged and stored in every forecast's `attrs['seed']`.
-    n_jobs: Number of worker processes; 1 runs in this process, -1 uses all CPUs.
+    n_jobs: Number of worker processes; 1 runs in this process, -1 uses all
+        available CPUs (respecting a container's CPU limit).
     history_uncertainty: Passed to prophet_batch.predict (True, False or 'analytic').
     columns: Optional forecast column name(s) to keep, e.g. ['ds', 'yhat', 'yhat_lower',
         'yhat_upper']. Workers drop the other columns before sending results back,
@@ -1807,7 +1842,8 @@ def cross_validation_many(
     models: Dict mapping series id to a fitted Prophet model (e.g. from fit_many).
     horizon, period, initial, cutoffs, extra_output_columns: As in cross_validation,
         applied to every series.
-    n_jobs: Number of worker processes; 1 runs in this process, -1 uses all CPUs.
+    n_jobs: Number of worker processes; 1 runs in this process, -1 uses all
+        available CPUs (respecting a container's CPU limit).
     seed: Integer seed for the uncertainty intervals; None draws one and logs it.
     as_frame: False (default) returns a dict of per-series DataFrames; True returns one
         DataFrame with the series id in column `id_col`.

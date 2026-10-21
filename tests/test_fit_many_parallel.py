@@ -94,3 +94,42 @@ def test_bunched_stan_series_identical_for_any_n_jobs():
     order = ["logistic0"] + [k for k in frames if k != "logistic0"]  # Stan series first, contiguous
     df = _long({k: frames[k] for k in order})
     _assert_identical(fit_many(df, make_model=make_model), fit_many(df, make_model=make_model, n_jobs=3))
+
+
+class TestAvailableCpus:
+    """F4.2a: n_jobs=-1 respects a container's CPU quota (cgroup v2 cpu.max, v1 CFS) and the affinity set."""
+
+    @staticmethod
+    def _limit(tmp_path, files):
+        from api import _cgroup_cpu_limit
+
+        for name, text in files.items():
+            (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / name).write_text(text)
+        return _cgroup_cpu_limit(str(tmp_path))
+
+    @pytest.mark.parametrize("files, expected", [
+        ({"cpu.max": "800000 100000\n"}, 8),
+        ({"cpu.max": "150000 100000\n"}, 2),        # 1.5 CPUs: rounded up
+        ({"cpu.max": "50000 100000\n"}, 1),
+        ({"cpu.max": "max 100000\n"}, None),        # no quota
+        ({"cpu/cpu.cfs_quota_us": "400000\n", "cpu/cpu.cfs_period_us": "100000\n"}, 4),   # cgroup v1
+        ({"cpu/cpu.cfs_quota_us": "-1\n", "cpu/cpu.cfs_period_us": "100000\n"}, None),
+        ({}, None),                                  # not in a cgroup / unreadable
+    ])
+    def test_cgroup_limit(self, tmp_path, files, expected):
+        assert self._limit(tmp_path, files) == expected
+
+    def test_n_jobs_minus_one_takes_the_smaller(self, monkeypatch):
+        import os
+
+        import api
+
+        monkeypatch.setattr(api.MODULE, "_cgroup_cpu_limit", lambda root="": 3)
+        monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(8)), raising=False)
+        assert api.MODULE._resolve_n_jobs(-1) == 3
+        monkeypatch.setattr(api.MODULE, "_cgroup_cpu_limit", lambda root="": None)
+        assert api.MODULE._resolve_n_jobs(-1) == 8
+        monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1}, raising=False)
+        assert api.MODULE._resolve_n_jobs(-1) == 2
+        assert api.MODULE._resolve_n_jobs(5) == 5 and api.MODULE._resolve_n_jobs(0) == 1

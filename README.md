@@ -49,7 +49,8 @@ forecasts = predict_many(models, periods=28, seed=42, n_jobs=-1)
 forecasts["store_0"][["ds", "yhat", "yhat_lower", "yhat_upper"]].tail()
 ```
 
-`n_jobs=-1` uses every CPU; results are bit-identical for any `n_jobs`. Each model is a normal `Prophet` object,
+`n_jobs=-1` uses every CPU available to the process (in a container: its CPU limit, which `os.cpu_count()`
+ignores); results are bit-identical for any `n_jobs`. Each model is a normal `Prophet` object,
 so `plot`, `plot_components`, `model_to_json`, `cross_validation` and the rest of the stock API work on it.
 
 ### Configuring the models
