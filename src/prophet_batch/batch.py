@@ -534,6 +534,73 @@ def _history_key(df: pd.DataFrame) -> bytes:
     return np.sort(ds.to_numpy(dtype='datetime64[ns]')).tobytes()
 
 
+# Most distinct model configurations kept for one history key: bounds the comparisons
+# when make_model configures every series differently.
+_MAX_CONFIGS_PER_KEY = 16
+
+
+def _data_key(model: Prophet, df: pd.DataFrame) -> bytes | None:
+    """Identifies the series data that enters the features: the model's regressor and
+    condition columns on the history rows, in date order.
+
+    Empty when the model has no such columns; None (do not share) when the dates repeat
+    or a column is missing or not numeric, which the per-series preprocess handles.
+    """
+    cols = list(model.extra_regressors) + [
+        props['condition_name'] for props in model.seasonalities.values()
+        if props['condition_name'] is not None
+    ]
+    if not cols:
+        return b''
+    history = df[df['y'].notnull()]
+    ds = pd.to_datetime(history['ds']).to_numpy(dtype='datetime64[ns]')
+    order = np.argsort(ds, kind='stable')
+    if len(np.unique(ds)) < len(ds):
+        return None
+    h = hashlib.sha256()
+    for col in cols:
+        if col not in history:
+            return None
+        h.update(f'{col}\0{history[col].dtype}\0'.encode())
+        try:
+            values = history[col].to_numpy(dtype=float)
+        except (TypeError, ValueError):
+            return None
+        h.update(np.ascontiguousarray(values[order]).tobytes())
+    return h.digest()
+
+
+def _config(model: Prophet) -> dict[str, Any]:
+    """An unfitted model's state, which determines its preprocessing."""
+    state = {k: v for k, v in vars(model).items() if k != 'stan_backend'}
+    state['__class__'] = type(model)
+    return state
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Exact equality of model state: DataFrames, Series, arrays, dicts (in order), scalars."""
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, (pd.DataFrame, pd.Series)):
+        return (a.shape == b.shape and a.index.equals(b.index) and a.equals(b)
+                and (a.dtypes == b.dtypes if isinstance(a, pd.Series) else
+                     a.columns.equals(b.columns) and list(a.dtypes) == list(b.dtypes))
+                and getattr(a, 'name', None) == getattr(b, 'name', None))
+    if isinstance(a, np.ndarray):
+        return (a.dtype == b.dtype and a.shape == b.shape
+                and bool(np.array_equal(a, b, equal_nan=a.dtype.kind in 'fc')))
+    if isinstance(a, dict):
+        return list(a) == list(b) and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if a is b:
+        return True
+    try:
+        return bool(a == b) or (a != a and b != b)  # NaN == NaN here
+    except Exception:
+        return False
+
+
 def _preprocess_shared(
     model: Prophet, df: pd.DataFrame, shared: _SharedFeatures, fit_kwargs: dict[str, Any]
 ) -> ModelInputData:
@@ -603,7 +670,7 @@ def _prepare(
     df: pd.DataFrame,
     id_col: str,
     make_model: Callable[[Hashable], Prophet],
-    share_dates: bool,
+    share: bool,
     on_error: str = 'raise',
     kwargs_for: Callable[[Hashable], dict[str, Any]] = _no_fit_kwargs,
 ) -> tuple[
@@ -616,7 +683,8 @@ def _prepare(
 ]:
     """Create and preprocess one model per series and sort them by how they are fit.
 
-    With share_dates, series with identical history dates reuse date-only work.
+    With share, series whose unfitted models are identical and that have the same history
+    dates and regressor / condition values reuse the preprocessing of the first of them.
 
     Returns
     -------
@@ -627,7 +695,7 @@ def _prepare(
     (on_error='skip'; with 'raise' the error propagates, naming the series).
     """
     order, batch, mult, constant, fallback, skipped = [], [], [], [], [], []
-    shared_by_dates = {}
+    shared_by_key: dict[tuple[bytes, bytes], list[tuple[dict[str, Any], _SharedFeatures]]] = {}
     for sid, group in df.groupby(id_col, sort=False):
         series_df = group.drop(columns=id_col).reset_index(drop=True)
         try:
@@ -636,18 +704,29 @@ def _prepare(
             if reason is not None:
                 fallback.append((sid, series_df, reason))
             else:
-                key = _history_key(series_df) if share_dates else None
-                shared = shared_by_dates.get(key) if key is not None else None
+                key, config, shared = None, None, None
+                if share:
+                    data_key = _data_key(model, series_df)
+                    if data_key is not None:
+                        key = (_history_key(series_df), data_key)
+                        config = _config(model)
+                        shared = next((sh for cfg, sh in shared_by_key.get(key, [])
+                                       if _same(cfg, config)), None)
                 if shared is None:
+                    keep = (key is not None
+                            and len(shared_by_key.setdefault(key, [])) < _MAX_CONFIGS_PER_KEY)
+                    # copied before preprocess mutates the model
+                    config = deepcopy(config) if keep else None
                     inputs = model.preprocess(series_df, **kwargs_for(sid))
                     Z = None if has_multiplicative_terms(inputs) else design_matrix(inputs)
-                    if key is not None:
-                        shared_by_dates[key] = _SharedFeatures(
+                    if keep:
+                        entry = _SharedFeatures(
                             X=inputs.X, K=inputs.K, sigmas=inputs.sigmas,
                             component_cols=cast(pd.DataFrame, model.train_component_cols),
                             modes=cast(dict, model.component_modes),
                             train_holiday_names=model.train_holiday_names, Z=Z,
                         )
+                        shared_by_key[cast(tuple, key)].append((cast(dict, config), entry))
                 else:
                     inputs = _preprocess_shared(model, series_df, shared, kwargs_for(sid))
                     Z = shared.Z
@@ -786,9 +865,10 @@ def fit_many(
     optimum of the same posterior; it typically has a slightly higher log posterior than
     Stan's L-BFGS, which stops early, so fitted values can differ slightly from fit().
 
-    Without make_model, all models share one configuration, so series with identical
-    history dates also share their date-only preprocessing (seasonality features and
-    design matrix); the resulting models are identical to individually preprocessed ones.
+    Series whose unfitted models are identical (always the case without make_model) and
+    that have the same history dates and regressor / condition values share their
+    preprocessing (features and design matrix); the resulting models are identical to
+    individually preprocessed ones.
 
     Parameters
     ----------
@@ -848,13 +928,12 @@ def fit_many(
         return _fit_many_parallel(df, id_col, make_model, n_jobs, prophet_kwargs, on_error,
                                   fit_kwargs)
 
-    share_dates = make_model is None
     if make_model is None:
         def make_model(series_id: Hashable) -> Prophet:
             return Prophet(**prophet_kwargs)
 
     order, batch, mult, constant, fallback, skipped = _prepare(
-        df, id_col, make_model, share_dates, on_error, kwargs_for)
+        df, id_col, make_model, True, on_error, kwargs_for)
     models = {sid: model for sid, model in constant}
 
     # Series are solved in groups of identical coordinate shape, so no series is padded

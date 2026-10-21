@@ -90,6 +90,18 @@ def test_seeded_and_independent_of_order_and_grouping(models, cvs, monkeypatch):
         pd.testing.assert_frame_equal(again[sid], cvs[sid])
 
 
+def test_same_without_shared_preprocessing(models, cvs, monkeypatch):
+    """F3.2: refits at a cutoff share preprocessing across series; the result is unchanged."""
+    from api import MODULE as batch
+
+    monkeypatch.setattr(batch, "_MAX_CONFIGS_PER_KEY", 0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        again = cross_validation_many(models, seed=1, **CV)
+    for sid in models:
+        pd.testing.assert_frame_equal(again[sid], cvs[sid])
+
+
 def test_as_frame(models, cvs):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

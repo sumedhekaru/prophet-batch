@@ -68,7 +68,9 @@ def make_model(series_id):
 models = fit_many(df, make_model=make_model)
 ```
 
-With `n_jobs != 1`, `make_model` must be picklable (a module-level function, not a lambda).
+With `n_jobs != 1`, `make_model` must be picklable (a module-level function, not a lambda). Series whose models
+come out identical and that have the same dates and regressor values (e.g. one holiday calendar and a regressor
+shared by all series) are preprocessed once, as without `make_model`; the results are the same either way.
 
 Other options: `fit_kwargs` (arguments for `Prophet.fit`, as a dict or a per-series function, used by series that
 are fit by Stan), and `on_error="skip"` (leave out series that Prophet can't fit, e.g. fewer than 2 non-NaN rows,

@@ -359,18 +359,24 @@ def assert_same(a, b, path="model"):
 class TestSharedDates:
     """C2.2: the shared-dates fast path produces exactly the per-series preprocess state."""
 
-    def _check(self, frames, **kw):
+    def _check(self, frames, make_model=None, groups=None, **kw):
+        """Shared preprocessing equals per-series preprocess; `groups`: expected distinct Zs."""
         import dataclasses
 
         from api import _prepare
 
+        make_model = make_model or (lambda sid: Prophet(**kw))
         df = _long(frames)
         order, batch, mult, constant, fallback, skipped = _prepare(
-            df, "unique_id", lambda sid: Prophet(**kw), True)
-        assert not fallback and not skipped
-        assert len({id(Z) for _, _, _, Z, _ in batch}) < len(batch), "nothing was shared"
+            df, "unique_id", make_model, True)
+        assert not fallback and not skipped and len(batch) == len(frames)
+        n_z = len({id(Z) for _, _, _, Z, _ in batch})
+        if groups is None:
+            assert n_z < len(batch), "nothing was shared"
+        else:
+            assert n_z == groups, (n_z, groups)
         for sid, model, inputs, Z, _ in batch:
-            ref = Prophet(**kw)
+            ref = make_model(sid)
             ref_inputs = ref.preprocess(frames[sid])
             state, ref_state = vars(model), vars(ref)
             for key in set(state) | set(ref_state):
@@ -399,6 +405,70 @@ class TestSharedDates:
         shared = fit_many(_long(frames))
         unshared = fit_many(_long(frames), make_model=lambda sid: Prophet())
         for sid in frames:
+            for k in shared[sid].params:
+                np.testing.assert_array_equal(shared[sid].params[k], unshared[sid].params[k])
+
+    # F3.2: make_model series share when their models and regressor / condition data match.
+
+    @staticmethod
+    def _with_x(frames, x_for):
+        return {sid: f.assign(x=x_for(sid, f)) for sid, f in frames.items()}
+
+    def test_make_model_identical_config(self):
+        frames = {f"s{i}": make_series(seed=i) for i in range(4)}
+        self._check(frames, lambda sid: Prophet(holidays=HOLIDAYS), groups=1)
+
+    def test_make_model_common_regressor(self):
+        frames = self._with_x({f"s{i}": make_series(seed=i) for i in range(4)},
+                              lambda sid, f: np.sin(np.arange(len(f)) / 7.0))
+        self._check(frames, _holiday_regressor_model, groups=1)
+
+    def test_make_model_per_series_regressor(self):
+        frames = self._with_x({f"s{i}": make_series(seed=i) for i in range(4)},
+                              lambda sid, f: np.random.default_rng(len(sid) + int(sid[1:])).normal(size=len(f)))
+        self._check(frames, _holiday_regressor_model, groups=4)
+
+    def test_make_model_regressor_groups(self):
+        # two calendars, each shared by two series; standardization uses each group's own values
+        frames = self._with_x({f"s{i}": make_series(seed=i) for i in range(4)},
+                              lambda sid, f: (np.arange(len(f)) % (5 + int(sid[1:]) % 2)).astype(float))
+        self._check(frames, _holiday_regressor_model, groups=2)
+
+    def test_make_model_conditional_seasonality(self):
+        def make_model(sid):
+            m = Prophet(weekly_seasonality=False)
+            m.add_seasonality("weekly_on", period=7, fourier_order=3, condition_name="on")
+            return m
+
+        frames = {f"s{i}": make_series(seed=i).assign(on=lambda f: f["ds"].dt.month < 7) for i in range(3)}
+        frames["off"] = make_series(seed=7).assign(on=lambda f: f["ds"].dt.month >= 7)
+        self._check(frames, make_model, groups=2)
+
+    def test_make_model_mixed_configs(self):
+        later = HOLIDAYS.assign(ds=HOLIDAYS["ds"] + pd.Timedelta(days=1))  # same shape, other dates
+
+        def make_model(sid):
+            i = int(sid[1:])
+            if i % 3 == 0:
+                return Prophet(holidays=HOLIDAYS)
+            if i % 3 == 1:
+                return Prophet(holidays=later)
+            return Prophet(holidays=HOLIDAYS, holidays_prior_scale=5.0)
+
+        frames = {f"s{i}": make_series(seed=i) for i in range(6)}
+        self._check(frames, make_model, groups=3)
+
+    def test_make_model_fit_same_as_without_sharing(self, monkeypatch):
+        import api
+        from api import fit_many
+
+        frames = self._with_x({f"s{i}": make_series(seed=i) for i in range(5)},
+                              lambda sid, f: np.cos(np.arange(len(f)) / 30.0))
+        shared = fit_many(_long(frames), make_model=_holiday_regressor_model)
+        monkeypatch.setattr(api.MODULE, "_MAX_CONFIGS_PER_KEY", 0)
+        unshared = fit_many(_long(frames), make_model=_holiday_regressor_model)
+        for sid in frames:
+            assert shared[sid].extra_regressors == unshared[sid].extra_regressors
             for k in shared[sid].params:
                 np.testing.assert_array_equal(shared[sid].params[k], unshared[sid].params[k])
 
