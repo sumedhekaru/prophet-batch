@@ -1,19 +1,65 @@
 # prophet-batch
 
-Fit and forecast many [Prophet](https://github.com/facebook/prophet) models at once, on top of the stock
-`prophet` package (≥ 1.5):
+**Forecast thousands to millions of series with [Prophet](https://github.com/facebook/prophet), about 10× faster than
+a stock Prophet process pool on the same cores, with the same accuracy.** prophet-batch runs on top of the stock
+`prophet` package (≥ 1.5): your models stay ordinary `Prophet` objects, and your data stays in your hands.
 
-- **`fit_many`** fits thousands of series together with batched MAP solvers instead of one Stan run per series.
-  The result for each series is an ordinary `Prophet` model whose log posterior is at least as high as Stan's.
-- **`predict_many`** forecasts them in parallel with per-series seeds: a forecast depends only on
-  (seed, series id), not on worker count, order, or which other series are predicted.
-- **`cross_validation_many`** runs stock-format cross-validation for many models at once.
-- **`predict`** is `Prophet.predict` with a per-call random generator and faster history-interval modes.
+- **`fit_many`** fits all series together with exact batched solvers instead of one Stan optimization per series.
+  Every fit reaches a log posterior at least as high as Stan's (checked on every one of 38,905 public series).
+- **`predict_many`** forecasts them in parallel, reproducibly: each series has its own seeded random stream.
+- **`forecast_many` and `Pool`** fit and forecast in one step for large catalogs: batch after batch from your
+  own files or database, with flat memory, workers kept between batches.
+- **`cross_validation_many`** and **`predict`**: stock-format cross-validation for many models, and stock's predict
+  with a seedable generator and faster history intervals for one.
 
-Measured against stock Prophet 1.5.0 on the same 10 workers (fit + forecast, six public datasets, 38,905 series):
-the same holdout accuracy, and 1.5× (short series) to 26.5× (M4 Daily) faster with full history intervals.
-Guarantees and how they are tested: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md). Runnable use cases with accuracy
-and speed against stock Prophet on macOS, Windows, Linux (Docker), Cloud Run and Spark (Dataproc):
+## Results
+
+1,437 Walmart grocery items (M5, FOODS, daily, 28 days ahead), default `Prophet()`, fit + forecast, against stock
+Prophet run the way people parallelize it: a process pool on every core. prophet-batch 0.1.1 from PyPI, median of 3
+runs ([all tables, and the code to rerun them](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting)):
+
+| environment | stock Prophet, process pool | prophet-batch | faster |
+|---|---:|---:|---:|
+| MacBook, Apple M4, 10 cores | 53.1 s | 5.2 s | **10.2×** |
+| Linux container (Docker), same Mac | 57.2 s | 6.7 s | **8.6×** |
+| Cloud Run job, 4 vCPU | 254.4 s | 23.6 s | **10.9×** |
+| Windows laptop, Intel i7-1260P, 16 threads | 298.9 s | 25.8 s | **11.6×** |
+| Spark on Dataproc Serverless, 2 × 4 cores (execution¹) | 234.5 s | 24.2 s | **9.7×** |
+
+¹ The Spark job's execution phase; end to end 1.9×, because each batch also spends ≈ 185 s on platform start-up and
+loading, the same for both.
+
+- **Same accuracy:** WAPE 0.3438 vs 0.3446, MASE 1.4261 vs 1.4279 (difference within noise), on every platform;
+  with holidays and with holidays + regressors as well (7.4–11.2× there).
+- **Six public datasets** (M5 item and item × store, M4 Daily, Weekly, Hourly, Tourism Monthly: 38,905 series, the
+  same 10 workers; measured before the first release, re-run on 0.1.2 to come): the same holdout accuracy, slightly
+  better beyond noise on four of them, and 1.5× (short series) to **26.5×** (M4 Daily, long series) faster with full
+  history intervals.
+- **At scale:** 15,000 item × store series in one call (Apple M4; four forecast columns, analytic history
+  intervals): `forecast_many` 26.5 s and 4.0 GB at peak, vs 33.7 s and 6.3 GB with `fit_many` + `predict_many`.
+  Streaming a CSV in batches through one `Pool`: the file grew 8.7× (169 MB → 1.5 GB), memory 0.44 → 0.55 GB.
+
+## Why it is fast, and what you can rely on
+
+- **Exact batched fits.** For Prophet's linear-growth model the MAP is a convex problem (a lasso on the changepoints
+  from their Laplace prior), solved exactly for many series at once; multiplicative seasonality by a verified
+  Gauss–Newton refinement. Stan's L-BFGS stops a little short of that optimum, so prophet-batch's fits come out at
+  least as good: on every series of every benchmark so far. Logistic growth, MCMC and regressor predictors go to
+  Stan, with exactly its result.
+- **Shared work.** Series with the same dates and configuration share their features and design matrices.
+- **Exact history intervals.** `history_uncertainty="analytic"` gives the closed form that sampled history intervals
+  converge to, instead of 1,000 simulated paths per series: most of the forecast time otherwise.
+- **Bit-identical results** for any `n_jobs`, `batch_size`, series order and split of the input: a series' fit
+  depends only on its own data, and its forecast only on (seed, series id). Across CPU types they agree to ≈ 1e-9.
+- **Stock behaviour where it matters.** Defaults follow stock Prophet; fitted models work with `plot`,
+  `plot_components`, `model_to_json`, `cross_validation` and the rest of the stock API (41 callables checked
+  bit-identical).
+- **Bounded memory, any platform.** Workers prepare at most about 100 series at a time, sized to half the available
+  memory (container limits included); one Stan model is reused per process (Windows); `n_jobs=-1` respects container
+  CPU limits. CI on Linux, macOS and Windows, Python 3.10–3.13.
+
+Guarantees and the tests behind them: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md).
+Runnable use cases with accuracy and speed on macOS, Windows, Linux, Cloud Run and Spark:
 [prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples).
 
 Status: alpha (0.1.1): the public API (below) is stable in intent but may still change before 1.0.
@@ -189,8 +235,8 @@ composition. Without a seed, a fresh one is drawn, logged, and stored in each fo
 
 ## API stability
 
-The public API is what `prophet_batch` exports at the top level: `fit_many`, `predict_many`,
-`cross_validation_many`, `predict` and `series_rng`. Everything else (the solvers and helpers in
+The public API is what `prophet_batch` exports at the top level: `fit_many`, `predict_many`, `forecast_many`,
+`Pool`, `cross_validation_many`, `predict` and `series_rng`. Everything else (the solvers and helpers in
 `prophet_batch.batch`, such as `solve_map` or `log_posterior`, and the private modules) is internal and may change
 between releases.
 
@@ -201,15 +247,14 @@ between releases.
   fits a little tighter than Stan's L-BFGS, which stops short of the optimum.
 - **Memory**: each worker holds one batch at a time (about 0.5–0.6 GB per worker for M5's 1,941-day series), but
   the models `fit_many` returns stay in your process: ≈ 0.12 MB per series at that length, mostly the history
-  frame every stock Prophet model keeps. 30,490 such series need ≈ 4 GB for the models alone.
+  frame every stock Prophet model keeps (30,490 such series: ≈ 4 GB for the models alone). When you only need the
+  forecasts, `forecast_many` keeps no models; batch through a `Pool` for any number of series.
 - With few, short series, process start-up dominates: use `n_jobs=1` there. For small jobs, fewer workers are often
   faster than `n_jobs=-1`, especially on Windows, where each worker is a newly started process that imports Prophet
   (Windows laptop, 400 items: 5.8 s with 4 workers vs 11.0 s with 16).
-- **Windows speed (fixed in 0.1.1):** 0.1.0 was slow on Windows because cmdstanpy starts a `where.exe` process each
-  time a Prophet model is created there (≈ 100 ms per model). Since 0.1.1, `fit_many` and `cross_validation_many`
-  reuse one loaded Stan model per process; results are unchanged. On a Windows laptop (Intel Core i7-1260P, 16
-  logical CPUs), 1,437 M5 items: 3.1× → 11.5× faster than a 16-process stock Prophet pool (total 125.8 s → 30.3 s),
-  in line with macOS (10.2×) and Linux (8.6×). Stock Prophet on Windows still pays this cost per model.
+- **Windows**: stock Prophet pays ≈ 100 ms per model there (cmdstanpy starts a `where.exe` process each time a
+  model is created); prophet-batch avoids it since 0.1.1 by reusing one loaded Stan model per process, which is
+  why its Windows speed-up (11.6×) is in line with the other platforms.
 
 More: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md) (what is guaranteed and how it is tested) and
 [docs/migration.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/migration.md) (from a stock loop or process pool).
