@@ -192,3 +192,12 @@ class TestAvailableMemory:
 
         avail = _available_memory()
         assert avail is not None and avail > 0
+
+
+def test_stan_classification_budget():
+    """Scheduling only: with the time budget used up, the remaining series are scheduled with the rest."""
+    from api import _split_stan_series
+
+    ids = ["logistic0", "add0", "logistic1", "add1"]
+    assert _split_stan_series(ids, make_model, {}, budget=None) == (["logistic0", "logistic1"], ["add0", "add1"])
+    assert _split_stan_series(ids, make_model, {}, budget=-1.0) == ([], ids)        # no time: nothing classified

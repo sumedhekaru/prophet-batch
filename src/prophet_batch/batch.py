@@ -1036,23 +1036,39 @@ def _fit_chunk(
                     fit_kwargs=fit_kwargs, batch_size=batch_size, **prophet_kwargs)
 
 
+# Seconds the parent may spend building models to find the Stan-fit series (scheduling only):
+# make_model can be slow (add_country_holidays: ~5 ms a series), and this runs before any
+# worker starts; series not classified in time are scheduled with the rest.
+_CLASSIFY_BUDGET = 1.0
+
+
 def _split_stan_series(
     ids: list[Hashable],
     make_model: Callable[[Hashable], Prophet] | None,
     prophet_kwargs: dict[str, Any],
+    budget: float | None = None,
 ) -> tuple[list[Hashable], list[Hashable]]:
     """Split series ids into those Prophet.fit will fit (by configuration) and the rest.
 
     Only for scheduling: a series whose model can't even be built is left with the rest,
-    and its worker reports the error as fit_many would.
+    and its worker reports the error as fit_many would. With a budget (seconds), series
+    still unclassified when it runs out go with the rest.
     """
+    import time
+
     from prophet.forecaster import Prophet
 
     if make_model is None:
         stan = unsupported_reason(Prophet(**prophet_kwargs)) is not None
         return (list(ids), []) if stan else ([], list(ids))
     stan_ids, rest = [], []
-    for sid in ids:
+    start = time.perf_counter()
+    for i, sid in enumerate(ids):
+        if budget is not None and time.perf_counter() - start > budget:
+            logger.debug('fit_many: %d of %d series classified for scheduling in %.1f s; the '
+                          'rest are scheduled in order', i, len(ids), budget)
+            rest.extend(ids[i:])
+            break
         try:
             is_stan = unsupported_reason(make_model(sid)) is not None
         except Exception:
@@ -1080,7 +1096,10 @@ def _plan_tasks(
 
     rows_by_id = df.groupby(id_col, sort=False).indices
     ids = list(rows_by_id)
-    stan_ids, batch_ids = _split_stan_series(ids, make_model, prophet_kwargs)
+    if n_jobs > 1:
+        stan_ids, batch_ids = _split_stan_series(ids, make_model, prophet_kwargs, _CLASSIFY_BUDGET)
+    else:  # one process: the order of the work doesn't matter
+        stan_ids, batch_ids = [], ids
     tasks: list[list[Hashable]] = []
     if stan_ids:
         cap = max(1, -(-len(stan_ids) // min(len(stan_ids), n_jobs * 4)))
