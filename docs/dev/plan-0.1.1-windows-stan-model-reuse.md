@@ -53,10 +53,26 @@ A private context manager in `src/prophet_batch/batch.py`, e.g. `_reuse_stan_mod
 
 ## Steps
 
-- [ ] 1. Baseline on the Windows machine, before any change (record numbers in this file):
+- [x] 1. Baseline on the Windows machine, before any change (record numbers in this file):
       `fit_profile.py --model default --n 200`, `fit_profile.py --model events_snap --n 200`,
       `fit_scaling.py --model default --jobs 1,4,16 --n 400`, `fit_scaling.py --model events_snap --jobs 1,4,16 --n 400`
       (all from prophet-batch-examples), and the time of `[Prophet() for _ in range(100)]`.
+
+      Result (2026-10-21, at d16496a, i7-1260P, Python 3.12.10, prophet 1.5.0, cmdstanpy 1.3.0, OpenBLAS):
+      - `[Prophet() for _ in range(100)]`: **11.32 s** (113 ms each).
+      - `fit_profile`, n_jobs=1, 200 items: default **31.7 s**, events_snap **32.4 s**. Of that,
+        `cmdstanpy ... do_command` (201 / 200 calls) is 27.4 s (default) and 25.7 s (events_snap); `readline`
+        (waiting for `where.exe`) 25.7 s / 24.0 s own time; `_winapi.CreateProcess` 1.5 s / 1.4 s.
+      - `fit_scaling`, 400 items, fit_many seconds (BLAS threads default / 1):
+
+        | model | n_jobs 1 | n_jobs 4 | n_jobs 16 |
+        |---|---:|---:|---:|
+        | default | 58.4 / 58.4 | 29.4 / 30.2 | 30.6 / 27.1 |
+        | events_snap | 63.0 / 60.6 | 78.9 / 83.0 | 77.5 / 77.0 |
+
+      - Same machine, earlier the same day (b00e7c9..5ee32a0): default 200 items 24.8 s; scaling default 83.3 / 38.0 /
+        33.5 s, events_snap 88.9 / 113.0 / 105.7 s. Absolute times vary by ~30% between runs on this laptop; the
+        shape (events_snap slower with more workers, Prophet() ≈ 100+ ms) is stable.
 - [ ] 2. Implement the context manager and use it in `fit_many` / `_fit_chunk` / `cross_validation_many`.
 - [ ] 3. Tests (new, in `tests/`; they run on every OS, no Windows-only assumptions):
       - fitted parameters identical with and without reuse (`_REUSE_STAN_MODEL` False vs True), incl. a mixed batch
