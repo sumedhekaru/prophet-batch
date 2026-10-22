@@ -76,8 +76,11 @@ come out identical and that have the same dates and regressor values (e.g. one h
 shared by all series) are preprocessed once, as without `make_model`; the results are the same either way.
 
 Other options: `fit_kwargs` (arguments for `Prophet.fit`, as a dict or a per-series function, used by series that
-are fit by Stan), and `on_error="skip"` (leave out series that Prophet can't fit, e.g. fewer than 2 non-NaN rows,
-with a warning, instead of raising).
+are fit by Stan), `on_error="skip"` (leave out series that Prophet can't fit, e.g. fewer than 2 non-NaN rows,
+with a warning, instead of raising), and `batch_size` (the most series a worker prepares and solves at once;
+`fit_many` and `cross_validation_many`). By default it is chosen automatically: up to 100 series (larger batches
+are not faster), fewer so every worker gets several tasks, and fewer again so the batches in flight use at most
+half of the available memory, which matters for long series. Results are bit-identical for any `batch_size`.
 
 ### What is batched
 
@@ -159,6 +162,9 @@ between releases.
 - Logistic growth, MCMC and regressor predictors are fit by Stan (correct, but not faster than stock).
 - Prediction intervals are about 0.04–0.6 percentage points narrower than stock's on public data: the exact MAP
   fits a little tighter than Stan's L-BFGS, which stops short of the optimum.
+- **Memory**: each worker holds one batch at a time (about 0.5–0.6 GB per worker for M5's 1,941-day series), but
+  the models `fit_many` returns stay in your process: ≈ 0.12 MB per series at that length, mostly the history
+  frame every stock Prophet model keeps. 30,490 such series need ≈ 4 GB for the models alone.
 - With few, short series, process start-up dominates: use `n_jobs=1` there. For small jobs, fewer workers are often
   faster than `n_jobs=-1`, especially on Windows, where each worker is a newly started process that imports Prophet
   (Windows laptop, 400 items: 5.8 s with 4 workers vs 11.0 s with 16).

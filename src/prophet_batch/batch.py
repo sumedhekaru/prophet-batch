@@ -700,6 +700,166 @@ def _resolve_n_jobs(n_jobs: int) -> int:
     return _available_cpus() if n_jobs == -1 else max(1, int(n_jobs))
 
 
+# Automatic batch size (fit_many(batch_size=None)): fitting is as fast at 25-200 series per
+# batch as with everything in one batch, so batches are capped at _BATCH_CAP series and
+# sized to use at most _MEMORY_SHARE of the available memory across the workers.
+_BATCH_CAP = 100
+_MEMORY_SHARE = 0.5
+
+
+def _check_batch_size(batch_size: int | None) -> None:
+    if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int)
+                                   or batch_size < 1):
+        raise ValueError(f'batch_size must be a positive int or None, got {batch_size!r}.')
+
+
+def _cgroup_memory_available(root: str = '/sys/fs/cgroup') -> int | None:
+    """Bytes a cgroup memory limit still allows (v2 memory.max, v1 limit_in_bytes) minus
+    current usage; None when there is no limit or it can't be read.
+    """
+    for limit_file, usage_file in (('memory.max', 'memory.current'),
+                                   (os.path.join('memory', 'memory.limit_in_bytes'),
+                                    os.path.join('memory', 'memory.usage_in_bytes'))):
+        try:
+            with open(os.path.join(root, limit_file)) as f:
+                limit = int(f.read().strip())
+            with open(os.path.join(root, usage_file)) as f:
+                usage = int(f.read().strip())
+        except (OSError, ValueError):  # missing, or 'max': no limit
+            continue
+        if limit >= 1 << 60:  # v1 reports a huge number for no limit
+            return None
+        return max(0, limit - usage)
+    return None
+
+
+def _available_memory() -> int | None:
+    """Bytes of memory available to this process now: the OS's available memory, capped by a
+    container's memory limit on Linux; None when it can't be read.
+    """
+    import sys
+
+    avail: int | None = None
+    try:
+        if sys.platform.startswith('linux'):
+            with open('/proc/meminfo') as f:
+                for line in f:
+                    if line.startswith('MemAvailable:'):
+                        avail = int(line.split()[1]) * 1024
+                        break
+            limit = _cgroup_memory_available()
+            if limit is not None:
+                avail = limit if avail is None else min(avail, limit)
+        elif sys.platform == 'darwin':
+            import re
+            import subprocess
+
+            out = subprocess.run(['vm_stat'], capture_output=True, text=True, timeout=10).stdout
+            match = re.search(r'page size of (\d+) bytes', out)
+            pages = re.findall(r'^Pages (?:free|inactive|speculative|purgeable):\s+(\d+)\.', out,
+                               re.MULTILINE)
+            if match and pages:
+                avail = int(match.group(1)) * sum(int(p) for p in pages)
+        elif sys.platform == 'win32':
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
+                            ('ullTotalPhys', ctypes.c_ulonglong),
+                            ('ullAvailPhys', ctypes.c_ulonglong),
+                            ('ullTotalPageFile', ctypes.c_ulonglong),
+                            ('ullAvailPageFile', ctypes.c_ulonglong),
+                            ('ullTotalVirtual', ctypes.c_ulonglong),
+                            ('ullAvailVirtual', ctypes.c_ulonglong),
+                            ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
+
+            status = _MemoryStatusEx()
+            status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            if getattr(ctypes, 'windll').kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                avail = int(status.ullAvailPhys)
+    except Exception:
+        return None
+    return avail if avail is not None and avail > 0 else None
+
+
+def _bytes_per_row(
+    series_df: pd.DataFrame,
+    model: Prophet,
+    fit_kwargs: dict[str, Any],
+) -> float | None:
+    """Estimated bytes that preparing a series holds per row of its history (features,
+    design matrix and a few vectors, float64), from preprocessing one series; None when it
+    can't be estimated (e.g. a configuration Prophet.fit handles).
+    """
+    try:
+        if unsupported_reason(model) is not None:
+            return None
+        inputs = model.preprocess(series_df, **fit_kwargs)
+        cols = np.asarray(inputs.X).shape[1]
+        if not has_multiplicative_terms(inputs):
+            cols += design_matrix(inputs).shape[1]
+        return 8.0 * (cols + 8)
+    except Exception:
+        return None
+
+
+def _plan_batches(
+    ids: list[Hashable],
+    rows: Mapping[Hashable, int],
+    cap: int,
+    budget: float | None,
+    bytes_per_row: float | None,
+) -> list[list[Hashable]]:
+    """Consecutive batches of series ids, each with at most `cap` series and, when a budget
+    is given, estimated bytes (rows × bytes_per_row) within it; every batch has at least one.
+    """
+    batches: list[list[Hashable]] = []
+    current: list[Hashable] = []
+    used = 0.0
+    for sid in ids:
+        need = rows[sid] * bytes_per_row if (budget is not None and bytes_per_row) else 0.0
+        if current and (len(current) >= cap or (budget is not None and used + need > budget)):
+            batches.append(current)
+            current, used = [], 0.0
+        current.append(sid)
+        used += need
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _batch_plan(
+    df: pd.DataFrame,
+    id_col: str,
+    ids: list[Hashable],
+    rows_by_id: Mapping[Hashable, Any],
+    make_model: Callable[[Hashable], Prophet],
+    kwargs_for: Callable[[Hashable], dict[str, Any]],
+    batch_size: int | None,
+    workers: int,
+) -> tuple[list[list[Hashable]], str]:
+    """The batches fit_many prepares and solves at once, and a note on how they were sized."""
+    rows = {sid: len(rows_by_id[sid]) for sid in ids}
+    if batch_size is not None:
+        return _plan_batches(ids, rows, batch_size, None, None), f'batch_size={batch_size}'
+    n = len(ids)
+    cap = _BATCH_CAP if workers == 1 else max(1, min(_BATCH_CAP, -(-n // (4 * workers))))
+    avail = _available_memory()
+    budget = _MEMORY_SHARE * avail / workers if avail is not None else None
+    bytes_per_row = None
+    if budget is not None and ids:
+        first = ids[0]
+        series_df = df.iloc[rows_by_id[first]].drop(columns=id_col).reset_index(drop=True)
+        try:
+            bytes_per_row = _bytes_per_row(series_df, make_model(first), kwargs_for(first))
+        except Exception:
+            bytes_per_row = None
+    batches = _plan_batches(ids, rows, cap, budget, bytes_per_row)
+    limited = ('memory' if budget is not None and bytes_per_row
+               and any(len(b) < cap for b in batches[:-1]) else 'count')
+    return batches, f'automatic: up to {cap} series per batch ({limited}-limited)'
+
+
 # Every Prophet() loads its compiled Stan model: CmdStanPyBackend.load_model builds a new
 # cmdstanpy.CmdStanModel, which on Windows starts a process (cmdstanpy 1.3: `where.exe
 # tbb.dll`, ~100 ms). fit_many creates one Prophet per series, so while it runs the loaded
@@ -853,11 +1013,12 @@ def _fit_chunk(
     prophet_kwargs: dict[str, Any],
     on_error: str,
     fit_kwargs: _FitKwargs,
+    batch_size: int | None = None,
 ) -> dict[Hashable, Prophet]:
     """Worker for fit_many(n_jobs > 1): fit one chunk of series in this process."""
     # prophet_kwargs is empty when make_model is given (fit_many checks).
     return fit_many(chunk_df, id_col=id_col, make_model=make_model, on_error=on_error,
-                    fit_kwargs=fit_kwargs, **prophet_kwargs)
+                    fit_kwargs=fit_kwargs, batch_size=batch_size, **prophet_kwargs)
 
 
 def _split_stan_series(
@@ -893,8 +1054,12 @@ def _fit_many_parallel(
     prophet_kwargs: dict[str, Any],
     on_error: str,
     fit_kwargs: _FitKwargs,
+    kwargs_for: Callable[[Hashable], dict[str, Any]],
+    batch_size: int | None,
 ) -> dict[Hashable, Prophet]:
-    """fit_many with n_jobs > 1: fit contiguous chunks of series in a process pool."""
+    """fit_many with n_jobs > 1: fit batches of consecutive series in a process pool."""
+    from prophet.forecaster import Prophet
+
     for name, fn in (('make_model', make_model), ('fit_kwargs', fit_kwargs)):
         if fn is None:
             continue
@@ -912,27 +1077,43 @@ def _fit_many_parallel(
     # contiguous chunks (results don't depend on chunk mates), enough of them to balance
     # workers of different speeds.
     stan_ids, batch_ids = _split_stan_series(ids, make_model, prophet_kwargs)
-    chunks = []
-    for part in (stan_ids, batch_ids):
-        n_parts = min(len(part), n_jobs * 4)
-        bounds = np.linspace(0, len(part), n_parts + 1).astype(int)
-        for lo, hi in zip(bounds[:-1], bounds[1:]):
-            rows = np.concatenate([rows_by_id[sid] for sid in part[lo:hi]])
-            chunks.append(df.iloc[np.sort(rows)])
+    tasks: list[list[Hashable]] = []
+    if stan_ids:
+        cap = max(1, -(-len(stan_ids) // min(len(stan_ids), n_jobs * 4)))
+        if batch_size is not None:
+            cap = min(cap, batch_size)
+        tasks += _plan_batches(stan_ids, {sid: 0 for sid in stan_ids}, cap, None, None)
+    note = ''
+    if batch_ids:
+        def build(series_id: Hashable) -> Prophet:
+            return make_model(series_id) if make_model is not None else Prophet(**prophet_kwargs)
 
-    from concurrent.futures import ProcessPoolExecutor
+        planned, note = _batch_plan(df, id_col, batch_ids, rows_by_id, build, kwargs_for,
+                                    batch_size, n_jobs)
+        tasks += planned
+
+    from collections import deque
+    from concurrent.futures import Future, ProcessPoolExecutor
     import multiprocessing
 
+    # Tasks are sliced from df as they are submitted, at most 2 * n_jobs at a time, so the
+    # input is never copied whole; results are collected in task order.
     ctx = multiprocessing.get_context('spawn')
+    models: dict[Hashable, Prophet] = {}
     with ProcessPoolExecutor(max_workers=n_jobs, mp_context=ctx) as pool:
-        n = len(chunks)
-        parts = list(pool.map(_fit_chunk, chunks, [id_col] * n, [make_model] * n,
-                              [prophet_kwargs] * n, [on_error] * n, [fit_kwargs] * n))
-    models = {}
-    for part in parts:
-        models.update(part)
-    logger.info('fit_many: %d series (%d via Prophet.fit) in %d tasks on %d worker processes, '
-                '%d skipped', len(ids), len(stan_ids), len(chunks), n_jobs, len(ids) - len(models))
+        pending: deque[Future] = deque()
+        for task in tasks:
+            chunk = df.iloc[np.sort(np.concatenate([rows_by_id[sid] for sid in task]))]
+            pending.append(pool.submit(_fit_chunk, chunk, id_col, make_model, prophet_kwargs,
+                                       on_error, fit_kwargs, len(task)))
+            del chunk
+            if len(pending) >= 2 * n_jobs:
+                models.update(pending.popleft().result())
+        while pending:
+            models.update(pending.popleft().result())
+    logger.info('fit_many: %d series (%d via Prophet.fit) in %d tasks on %d worker processes '
+                '(%s), %d skipped', len(ids), len(stan_ids), len(tasks), n_jobs,
+                note or 'Prophet.fit only', len(ids) - len(models))
     return {sid: models[sid] for sid in ids if sid in models}
 
 
@@ -944,6 +1125,7 @@ def fit_many(
     n_jobs: int = 1,
     on_error: str = 'raise',
     fit_kwargs: _FitKwargs = None,
+    batch_size: int | None = None,
     **prophet_kwargs: Any,
 ) -> dict[Hashable, Prophet]:
     """Fit one Prophet model per series, solving all supported series together.
@@ -982,6 +1164,12 @@ def fit_many(
         picklable). Series fit by Stan get them as with Prophet.fit; every model stores
         them in `fit_kwargs`, so cross_validation reuses them. The batched solvers don't
         use them (they find the MAP directly).
+    batch_size: Most series prepared and solved at once (one task of a worker; with
+        n_jobs=1, the series are fit in consecutive batches of this size). None (default)
+        chooses automatically: up to 100 series (fitting is no faster with larger batches),
+        fewer so that every worker gets several tasks, and fewer again so that the batches
+        in flight use at most half of the available memory (long series get small
+        batches). Results are bit-identical for any batch_size.
     prophet_kwargs: Passed to Prophet() when make_model is not given.
 
     Returns
@@ -995,6 +1183,7 @@ def fit_many(
         raise ValueError('Pass either make_model or Prophet keyword arguments, not both.')
     if on_error not in ('raise', 'skip'):
         raise ValueError(f"on_error must be 'raise' or 'skip', got {on_error!r}.")
+    _check_batch_size(batch_size)
     if fit_kwargs is None:
         kwargs_for = _no_fit_kwargs
     elif callable(fit_kwargs):
@@ -1017,12 +1206,40 @@ def fit_many(
     n_jobs = _resolve_n_jobs(n_jobs)
     if n_jobs > 1:
         return _fit_many_parallel(df, id_col, make_model, n_jobs, prophet_kwargs, on_error,
-                                  fit_kwargs)
+                                  fit_kwargs, kwargs_for, batch_size)
 
     if make_model is None:
         def make_model(series_id: Hashable) -> Prophet:
             return Prophet(**prophet_kwargs)
 
+    rows_by_id = df.groupby(id_col, sort=False).indices
+    ids = list(rows_by_id)
+    if batch_size is not None and len(ids) <= batch_size:
+        return _fit_in_process(df, id_col, make_model, on_error, kwargs_for)
+    batches, note = _batch_plan(df, id_col, ids, rows_by_id, make_model, kwargs_for, batch_size,
+                                1)
+    if len(batches) == 1:
+        return _fit_in_process(df, id_col, make_model, on_error, kwargs_for)
+    logger.info('fit_many: %d series in %d batches in this process (%s)', len(ids), len(batches),
+                note)
+    models: dict[Hashable, Prophet] = {}
+    for batch_ids in batches:
+        chunk = df.iloc[np.sort(np.concatenate([rows_by_id[sid] for sid in batch_ids]))]
+        models.update(_fit_in_process(chunk, id_col, make_model, on_error, kwargs_for,
+                                      logging.DEBUG))
+    return {sid: models[sid] for sid in ids if sid in models}
+
+
+def _fit_in_process(
+    df: pd.DataFrame,
+    id_col: str,
+    make_model: Callable[[Hashable], Prophet],
+    on_error: str,
+    kwargs_for: Callable[[Hashable], dict[str, Any]],
+    log_level: int = logging.INFO,
+) -> dict[Hashable, Prophet]:
+    """fit_many's work for one batch of series, in this process (its summary is logged at
+    log_level: DEBUG when fit_many runs several batches)."""
     order, batch, mult, constant, fallback, skipped = _prepare(
         df, id_col, make_model, True, on_error, kwargs_for)
     models = {sid: model for sid, model in constant}
@@ -1076,7 +1293,8 @@ def fit_many(
                 raise
             skipped.append(sid)
 
-    logger.info(
+    logger.log(
+        log_level,
         'fit_many: %d series batched (%d additive, %d multiplicative), %d constant, '
         '%d fell back to Prophet.fit (%d of them after the batched fit was rejected), '
         '%d skipped',
@@ -1821,6 +2039,7 @@ def _cv_group(
     seed: int,
     on_error: str,
     extra_output_columns: str | list[str] | None,
+    batch_size: int | None = None,
 ) -> dict[Hashable, pd.DataFrame]:
     """Cross-validate a group of series: one fit_many call for all their refits."""
     plans: dict[Hashable, tuple[Prophet, pd.DataFrame, list[str], list[pd.Timestamp]]] = {}
@@ -1843,7 +2062,8 @@ def _cv_group(
                                                      index=hist.index, dtype=object)))
     copies = _CopyAtCutoff({sid: plan[0] for sid, plan in plans.items()})
     fitted = fit_many(pd.concat(frames, ignore_index=True), id_col='_cv_key',
-                      make_model=copies.model, fit_kwargs=copies.fit_kwargs, on_error=on_error)
+                      make_model=copies.model, fit_kwargs=copies.fit_kwargs, on_error=on_error,
+                      batch_size=batch_size)
     out: dict[Hashable, pd.DataFrame] = {}
     for sid, (_, df, predict_columns, cuts) in plans.items():
         if any((sid, c) not in fitted for c in cuts):
@@ -1885,6 +2105,7 @@ def cross_validation_many(
     id_col: str = 'unique_id',
     on_error: str = 'raise',
     extra_output_columns: str | list[str] | None = None,
+    batch_size: int | None = None,
 ) -> dict[Hashable, pd.DataFrame] | pd.DataFrame:
     """Cross-validation for many fitted models, like prophet.diagnostics.cross_validation.
 
@@ -1906,6 +2127,8 @@ def cross_validation_many(
         DataFrame with the series id in column `id_col`.
     id_col: Name of the id column when as_frame=True.
     on_error: 'raise' (default) or 'skip', as in fit_many.
+    batch_size: As in fit_many, for the refits (each (series, cutoff) refit counts as one
+        series). Results are bit-identical for any batch_size.
 
     Returns
     -------
@@ -1914,6 +2137,7 @@ def cross_validation_many(
     """
     if on_error not in ('raise', 'skip'):
         raise ValueError(f"on_error must be 'raise' or 'skip', got {on_error!r}.")
+    _check_batch_size(batch_size)
     if seed is None:
         seed = cast(int, np.random.SeedSequence().entropy)
         logger.info('cross_validation_many: no seed given, using seed=%d', seed)
@@ -1924,7 +2148,7 @@ def cross_validation_many(
     if n_jobs == 1 or len(items) <= 1:
         for i in range(0, len(items), _CV_GROUP):
             results.update(_cv_group(items[i:i + _CV_GROUP], horizon_td, period, initial,
-                                     cutoffs, seed, on_error, extra_output_columns))
+                                     cutoffs, seed, on_error, extra_output_columns, batch_size))
     else:
         # Series whose models were fit by Stan refit by Stan at every cutoff (~100x slower),
         # so they go first, in small groups; results don't depend on the grouping.
@@ -1942,7 +2166,7 @@ def cross_validation_many(
         with ProcessPoolExecutor(max_workers=n_jobs, mp_context=ctx) as pool:
             for part in pool.map(_cv_group, groups, [horizon_td] * n, [period] * n,
                                  [initial] * n, [cutoffs] * n, [seed] * n, [on_error] * n,
-                                 [extra_output_columns] * n):
+                                 [extra_output_columns] * n, [batch_size] * n):
                 results.update(part)
     ordered = {sid: results[sid] for sid in models if sid in results}
     if not as_frame:

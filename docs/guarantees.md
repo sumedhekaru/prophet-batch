@@ -46,6 +46,12 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
 - **`fit_many` results are bit-identical for any `n_jobs`, series order and batch composition** (a series' fit
   depends only on its own data and configuration). `tests/test_properties.py::test_fit_independent_of_n_jobs`,
   `tests/test_properties.py::test_fit_independent_of_order`, `tests/test_properties.py::test_fit_independent_of_batch_mates`
+- **`fit_many` and `cross_validation_many` results are bit-identical for any `batch_size`** (given, automatic, or
+  memory-limited automatic), in one process and in parallel; output order and skipped series are unchanged.
+  `tests/test_batch_size.py::test_in_process_identical_for_any_batch_size`,
+  `tests/test_batch_size.py::test_parallel_identical_for_any_batch_size`,
+  `tests/test_batch_size.py::test_cross_validation_identical_for_batch_size`,
+  `tests/test_batch_size.py::TestPlan::test_automatic_memory_limited`
 - **`predict_many(seed=...)`: a forecast depends only on (seed, series id)**, not on `n_jobs`, order or which other
   series are predicted; the same in another process. `tests/test_predict_many.py::test_same_results_for_any_n_jobs`,
   `tests/test_predict_many.py::test_independent_of_order_and_subset`, `tests/test_series_rng.py::test_same_in_another_process`
