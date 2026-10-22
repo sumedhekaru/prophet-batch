@@ -18,6 +18,8 @@ a stock Prophet process pool on the same cores, with the same accuracy.** prophe
 Prophet run the way people parallelize it: a process pool on every core. prophet-batch 0.1.1 from PyPI, median of 3
 runs ([all tables, and the code to rerun them](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting)):
 
+![Fit + forecast of 1,437 Walmart items, seconds: stock Prophet in a process pool vs prophet-batch on the same cores, on five platforms; prophet-batch is 8.6 to 11.6 times faster](https://raw.githubusercontent.com/sumedhekaru/prophet-batch/main/docs/images/speed.png)
+
 | environment | stock Prophet, process pool | prophet-batch | faster |
 |---|---:|---:|---:|
 | MacBook, Apple M4, 10 cores | 53.1 s | 5.2 s | **10.2×** |
@@ -74,7 +76,8 @@ Requires Python ≥ 3.10 and `prophet>=1.5` (the stock PyPI wheel; no Stan build
 
 ## Quick start
 
-Data is in long format: one row per (series, date), with a series-id column, `ds` and `y`.
+Data is in long format: one row per (series, date), with a series-id column, `ds` and `y`. The snippets in this
+README run in order (later ones use `df` and `models` from here), and are run in CI.
 
 ```python
 import numpy as np
