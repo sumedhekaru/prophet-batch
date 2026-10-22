@@ -82,7 +82,7 @@ A private context manager in `src/prophet_batch/batch.py`, e.g. `_reuse_stan_mod
       `getattr_static(CmdStanPyBackend, 'load_model')` is a plain function. Smoke check on Windows:
       `[Prophet() for _ in range(100)]` inside the scope **0.198 s** (vs 11.32 s); one shared `CmdStanModel`, separate
       backends; original restored after nested exit and after an exception.
-- [ ] 3. Tests (new, in `tests/`; they run on every OS, no Windows-only assumptions):
+- [x] 3. Tests (new, in `tests/`; they run on every OS, no Windows-only assumptions):
       - fitted parameters identical with and without reuse (`_REUSE_STAN_MODEL` False vs True), incl. a mixed batch
         (additive, multiplicative, logistic → Stan fallback, constant series);
       - Stan-fallback series give exactly `Prophet.fit`'s result inside the reuse scope;
@@ -92,6 +92,15 @@ A private context manager in `src/prophet_batch/batch.py`, e.g. `_reuse_stan_mod
         original function again;
       - `cross_validation_many` output unchanged with and without reuse.
       Full suite green on Windows (`pytest -q`, both with and without `-p no:faulthandler` noted).
+
+      Result: `tests/test_stan_model_reuse.py`, 6 tests, one per bullet above (the mixed batch has additive,
+      multiplicative, logistic and constant series; the CV test has additive, constant and logistic). The load-count
+      test discriminates: on the same 20 series, `load_model` runs 21 times with `_REUSE_STAN_MODEL = False` and once
+      with True. Full suite on Windows (Python 3.12.10, prophet 1.5.0):
+      - `pytest -q`: **257 passed, 4 skipped** in 1028.99 s; 53 "Windows fatal exception: access violation" dumps
+        (faulthandler, at `_winapi.CreateProcess` while worker processes start).
+      - `pytest -q -p no:faulthandler`: **257 passed, 4 skipped** in 848.79 s; no dumps. Same results either way, so
+        the dumps are most likely faulthandler reporting handled exceptions during process start, not crashes.
 - [ ] 4. Measure after the change on Windows (same commands as step 1) and one full
       `run.py --model default` on all 1,437 items; expected: `Prophet()` construction no longer dominates; speed-ups vs
       the stock pool similar to other platforms (macOS 10.2×, Linux container 8.6×, Cloud Run 10.6×).
