@@ -117,6 +117,43 @@ results back, which saves memory and time (M5, 1,437 series with 30 holidays: 2.
 forecasts = predict_many(models, periods=28, seed=42, columns=["ds", "yhat", "yhat_lower", "yhat_upper"])
 ```
 
+### Large catalogs: forecast_many and Pool
+
+`forecast_many` fits and forecasts in one step and returns one long DataFrame: the series id first, then exactly what
+stock Prophet's `model.predict(model.make_future_dataframe(periods))` returns for each series (equal to
+`predict_many(fit_many(df), ...)` for that series and seed). No fitted model is kept or sent between processes, so
+it is faster and uses less memory than the two steps; on 15,000 M5 item × store series (10 workers, Apple M4):
+138.5 s and a 7.2 GB peak with stock's full output vs 147.9 s and 8.6 GB, and 26.5 s and 4.0 GB vs 33.7 s and 6.3 GB
+with `columns=["ds", "yhat", "yhat_lower", "yhat_upper"]` and `history_uncertainty="analytic"`.
+
+```python
+from prophet_batch import Pool, forecast_many
+
+fc = forecast_many(df, periods=28, seed=0, n_jobs=2)   # every series, stock's columns; n_jobs=-1: all CPUs
+
+
+def read_batches():                                    # stands for your data flow: files, a database, a queue
+    ids = df["unique_id"].unique()
+    for i in range(0, len(ids), 4):
+        yield df[df["unique_id"].isin(ids[i:i + 4])]
+
+
+written = []
+with Pool(n_jobs=2) as pool:                           # workers started once, kept for every batch
+    for batch in read_batches():
+        written.append(pool.forecast_many(batch, periods=28, seed=0, include_history=False,
+                                          columns=["ds", "yhat", "yhat_lower", "yhat_upper"]))
+```
+
+prophet-batch only computes: reading and writing stay in your code, in any format. `pool.submit(batch, ...)` returns
+a `concurrent.futures.Future`, so you can read the next batch or write the last one while this one runs. Options as
+in `fit_many` (`make_model`, `fit_kwargs`, `on_error`, `batch_size`, Prophet arguments) and `predict_many` (`seed`,
+`freq`, `include_history`, `history_uncertainty`, `columns`); `futures` (a long frame with the id column, or a dict)
+for regressors and caps; `return_params=True` also returns each series' fitted `model.params`. Series with
+different components (e.g. holidays for some) share one frame: a column a series doesn't have is NaN there. A
+streaming example (read a CSV in batches, forecast, write, with flat memory):
+[prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples).
+
 ### Single models
 
 `prophet_batch.predict` adds the same options to one model, with a numpy `Generator` for the draws. With the

@@ -52,6 +52,12 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
   `tests/test_batch_size.py::test_parallel_identical_for_any_batch_size`,
   `tests/test_batch_size.py::test_cross_validation_identical_for_batch_size`,
   `tests/test_batch_size.py::TestPlan::test_automatic_memory_limited`
+- **`forecast_many` equals `predict_many(fit_many(df), ...)` per series**, bit for bit, for any `n_jobs`,
+  `batch_size`, split of the input into calls, order and `Pool`; its default columns and point forecasts are stock
+  Prophet's. `tests/test_forecast_many.py::test_equals_fit_many_then_predict_many`,
+  `tests/test_forecast_many.py::test_default_is_stock_format_and_values`,
+  `tests/test_forecast_many.py::test_independent_of_input_split`,
+  `tests/test_forecast_many.py::TestPool::test_reuse_submit_and_concurrent_calls`
 - **`predict_many(seed=...)`: a forecast depends only on (seed, series id)**, not on `n_jobs`, order or which other
   series are predicted; the same in another process. `tests/test_predict_many.py::test_same_results_for_any_n_jobs`,
   `tests/test_predict_many.py::test_independent_of_order_and_subset`, `tests/test_series_rng.py::test_same_in_another_process`

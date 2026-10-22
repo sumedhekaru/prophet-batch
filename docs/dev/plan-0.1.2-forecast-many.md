@@ -27,7 +27,8 @@ with Pool(n_jobs=-1) as pool:                         # workers started once (Pr
     pool.submit(df, periods=28, ...)                  # concurrent.futures.Future of the same result
 ```
 
-- **Output** (default = stock): one long DataFrame: `id_col` first, then exactly the columns
+- **Output** (default = stock): one long DataFrame (series with different components share it: a column a series
+  doesn't have is NaN there): `id_col` first, then exactly the columns
   `model.predict(model.make_future_dataframe(periods, freq, include_history))` returns for each series (19 for default
   `Prophet()`), series in order of first appearance in `df`, rows in date order. `attrs['seed']` holds the seed.
 - **Equal to the two-step path:** a series' rows equal `predict_many(fit_many(df, ...), periods, seed=seed, ...)`'s
@@ -64,7 +65,12 @@ periods, columns); `Pool` reuse across calls, `submit` futures, concurrent submi
 
 ## Steps
 
-- [ ] 1. `forecast_many` (in-process and parallel) + tests.
-- [ ] 2. `Pool` + tests.
-- [ ] 3. Measure on M5 item × store vs fit_many + predict_many (parent peak, time; default and trimmed columns).
-- [ ] 4. README (the pattern, the opt-outs and what they save), guarantees.md.
+- [x] 1. `forecast_many` (in-process and parallel) + tests.
+- [x] 2. `Pool` + tests (15 tests in tests/test_forecast_many.py).
+- [x] 3. Measure on M5 item × store vs fit_many + predict_many (parent peak, time; default and trimmed columns).
+      Done (15,000 series, 10 workers): default output 147.9 → 138.5 s, parent peak 8.62 → 7.16 GB; trimmed 33.7 →
+      26.5 s, 6.26 → 4.03 GB; workers ≈ half. The first version (tasks return long frames, parent concatenates)
+      peaked at 12.1 GB: building one long frame holds the output twice, and on macOS freed task arrays are cached by
+      the allocator. Fix: preallocate each output column once (rows per series known from the task plan) and copy
+      every task into place as it arrives.
+- [x] 4. README (the pattern, the opt-outs and what they save), guarantees.md.

@@ -161,6 +161,30 @@ def test_validation():
         forecast_many(df, periods=3, batch_size=0)
 
 
+def test_assembler_unexpected_row_counts_and_missing_series():
+    """The output stays right when a series' row count differs from the expected one, or a series is missing."""
+    from prophet_batch._forecast import _Assembler, _Part
+
+    ds = pd.date_range("2024-01-01", periods=5)
+    part = _Part(["a", "b"], [3, 5], {"ds": np.concatenate([ds[:3], ds]), "yhat": np.arange(8.0)})
+    asm = _Assembler(["a", "b", "c"], {"a": 3, "b": 4, "c": 2}, "unique_id")   # b: 5 rows, not 4; c: never comes
+    asm.add(part)
+    out = asm.finish()
+    assert list(out["unique_id"]) == ["a"] * 3 + ["b"] * 5
+    np.testing.assert_array_equal(out["yhat"].to_numpy(), np.arange(8.0))
+    np.testing.assert_array_equal(out["ds"].to_numpy(), np.concatenate([ds[:3], ds]).astype(out["ds"].dtype))
+
+
+def test_repeated_dates_in_history():
+    """Duplicate ds rows: make_future_dataframe keeps the distinct dates; the output follows it."""
+    frames = _frames()
+    dup = frames["add1"]
+    frames["add1"] = pd.concat([dup, dup.iloc[:5]], ignore_index=True).sort_values("ds", kind="stable")
+    df = _long(frames)
+    ref = predict_many(fit_many(df, make_model=make_model), periods=7, seed=2)
+    _assert_same(forecast_many(df, periods=7, seed=2, make_model=make_model, n_jobs=2), ref)
+
+
 class TestPool:
     def test_reuse_submit_and_concurrent_calls(self, two_step):
         df, ref = two_step

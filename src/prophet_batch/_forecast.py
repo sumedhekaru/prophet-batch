@@ -34,6 +34,95 @@ if TYPE_CHECKING:
 
 logger: logging.Logger = logging.getLogger('prophet_batch')
 
+class _Part:
+    """One task's forecasts, column by column: each column one 1-D array over the task's
+    rows (series after series), so the parent can assemble the output a column at a time
+    and free each task's copy of it as it goes (peak ≈ the output plus one column)."""
+
+    def __init__(self, ids: list[Hashable], lens: list[int], cols: dict[str, np.ndarray]) -> None:
+        self.ids, self.lens, self.cols = ids, lens, cols
+
+    @classmethod
+    def of(cls, results: list[tuple[Hashable, pd.DataFrame]]) -> _Part:
+        names = list(dict.fromkeys(c for _, fc in results for c in fc.columns))
+        cols = {}
+        for c in names:
+            cols[c] = np.concatenate([fc[c].to_numpy() if c in fc else np.full(len(fc), np.nan)
+                                      for _, fc in results]) if results else np.array([])
+        return cls([sid for sid, _ in results], [len(fc) for _, fc in results], cols)
+
+
+class _Assembler:
+    """Builds the output frame while tasks finish: each output column is allocated once (row
+    counts per series are known up front), and every task's arrays are copied into place and
+    dropped as soon as the task returns, so the peak is the output plus the tasks in flight.
+
+    A series whose row count differs from the expected one (or that was skipped) is handled
+    at the end with one extra copy: correct output either way.
+    """
+
+    def __init__(self, order: list[Hashable], expected: Mapping[Hashable, int], id_col: str) -> None:
+        self.order, self.expected, self.id_col = order, expected, id_col
+        self.offset: dict[Hashable, int] = {}
+        pos = 0
+        for sid in order:
+            self.offset[sid] = pos
+            pos += expected[sid]
+        self.n = pos
+        self.cols: dict[str, np.ndarray] = {}
+        self.filled: set[Hashable] = set()
+        self.extra: dict[Hashable, dict[str, np.ndarray]] = {}
+
+    def _column(self, dtype: np.dtype) -> np.ndarray:
+        if dtype.kind == 'f':
+            return np.full(self.n, np.nan, dtype=dtype)
+        if dtype.kind in 'mM':
+            return np.full(self.n, np.array('NaT', dtype=dtype), dtype=dtype)
+        return np.full(self.n, None, dtype=object)
+
+    def add(self, part: _Part) -> None:
+        start = 0
+        for sid, n in zip(part.ids, part.lens):
+            rows = slice(start, start + n)
+            start += n
+            if n != self.expected.get(sid):
+                self.extra[sid] = {c: a[rows].copy() for c, a in part.cols.items()}
+                continue
+            at = self.offset[sid]
+            for c, a in part.cols.items():
+                col = self.cols.get(c)
+                if col is None:
+                    col = self.cols[c] = self._column(a.dtype)
+                col[at:at + n] = a[rows]
+            self.filled.add(sid)
+
+    def finish(self) -> pd.DataFrame:
+        done = [sid for sid in self.order if sid in self.filled or sid in self.extra]
+        ids = np.empty(len(done), dtype=object)
+        ids[:] = done
+        if not self.extra and len(done) == len(self.order):
+            out = {self.id_col: np.repeat(ids, [self.expected[sid] for sid in done]), **self.cols}
+            return pd.DataFrame(out, copy=False)
+        # skipped series, or row counts that differ from the expected: one copy, in order
+        for extra in self.extra.values():
+            for c, a in extra.items():
+                if c not in self.cols:
+                    self.cols[c] = self._column(a.dtype)
+        lens = [len(next(iter(self.extra[sid].values()))) if sid in self.extra else self.expected[sid]
+                for sid in done]
+        out = {self.id_col: np.repeat(ids, lens)}
+        for c, col in self.cols.items():
+            pieces = []
+            for sid, n in zip(done, lens):
+                if sid in self.extra:
+                    a = self.extra[sid].get(c)
+                    pieces.append(a if a is not None else self._column(col.dtype)[:n])
+                else:
+                    pieces.append(col[self.offset[sid]:self.offset[sid] + n])
+            out[c] = np.concatenate(pieces) if pieces else col[:0]
+        return pd.DataFrame(out, copy=False)
+
+
 def _forecast_task(
     df: pd.DataFrame,
     id_col: str,
@@ -50,8 +139,8 @@ def _forecast_task(
     history_uncertainty: bool | Literal['analytic'],
     columns: list[str] | None,
     return_params: bool,
-) -> tuple[pd.DataFrame, dict[Hashable, dict[str, np.ndarray]] | None]:
-    """Worker: fit one batch of series and forecast them; one long frame for the batch."""
+) -> tuple[_Part, dict[Hashable, dict[str, np.ndarray]] | None]:
+    """Worker: fit one batch of series and forecast them; the batch's forecasts as one _Part."""
     models = fit_many(df, id_col=id_col, make_model=make_model, on_error=on_error,
                       fit_kwargs=fit_kwargs, batch_size=batch_size, **prophet_kwargs)
     items = []
@@ -61,16 +150,8 @@ def _forecast_task(
                                                    include_history=include_history))
         items.append((sid, model, future))
     results = _predict_chunk(items, seed, history_uncertainty, columns)
-    if results:
-        out = pd.concat([fc for _, fc in results], ignore_index=True)
-        ids = np.empty(len(results), dtype=object)
-        ids[:] = [sid for sid, _ in results]
-        out.insert(0, id_col, np.repeat(ids, [len(fc) for _, fc in results]))
-    else:
-        out = pd.DataFrame({id_col: []})
-    out.attrs = {}
     params = {sid: model.params for sid, model in models.items()} if return_params else None
-    return out, params
+    return _Part.of(results), params
 
 
 def _forecast(
@@ -146,33 +227,38 @@ def _forecast(
         return (chunk, id_col, make_model, prophet_kwargs, on_error, fit_kwargs, len(task), sub,
                 periods, freq, include_history, seed, history_uncertainty, keep, return_params)
 
-    parts: list[tuple[pd.DataFrame, dict | None]] = []
+    # Rows per series in the output: its future frame, or its history rows (make_future_dataframe
+    # takes the distinct history dates: the same unless dates repeat, which the assembler handles)
+    # plus the periods.
+    if future_by_id is not None:
+        expected = {sid: len(future_by_id[sid]) for sid in ids}
+    else:
+        expected = {sid: (len(rows_by_id[sid]) if include_history else 0) + cast(int, periods)
+                    for sid in ids}
+    assembler = _Assembler(ids, expected, id_col)
+    params: dict[Hashable, dict[str, np.ndarray]] = {}
+
+    def collect(result: tuple[_Part, dict | None]) -> None:
+        part, p = result
+        assembler.add(part)
+        if p is not None:
+            params.update(p)
+
     if executor is None:
         for task in tasks:
-            parts.append(_forecast_task(*task_args(task)))
+            collect(_forecast_task(*task_args(task)))
     else:
         # Tasks are sliced as they are submitted, at most 2 * n_jobs at a time; results are
-        # collected in task order.
+        # copied into the output as they arrive, in task order.
         pending: deque[Future] = deque()
         for task in tasks:
             pending.append(executor.submit(_forecast_task, *task_args(task)))
             if len(pending) >= 2 * n_jobs:
-                parts.append(pending.popleft().result())
+                collect(pending.popleft().result())
         while pending:
-            parts.append(pending.popleft().result())
-    frames = [f for f, _ in parts if len(f)]
-    out = (pd.concat(frames, ignore_index=True) if frames
-           else pd.DataFrame({id_col: pd.Series([], dtype=object)}))
-    if stan_ids and len(out):
-        # Stan-fit series were sent first (scheduling): put every series' rows back in order
-        # of first appearance in df (rows of a series are contiguous: move whole blocks).
-        col = out[id_col].to_numpy()
-        starts = np.flatnonzero(np.r_[True, col[1:] != col[:-1]])
-        ends = np.r_[starts[1:], len(col)]
-        rank = {sid: i for i, sid in enumerate(ids)}
-        order = sorted(range(len(starts)), key=lambda b: rank[cast(Hashable, col[starts[b]])])
-        out = out.iloc[np.concatenate([np.arange(starts[b], ends[b]) for b in order])]
-        out = out.reset_index(drop=True)
+            collect(pending.popleft().result())
+    out = assembler.finish()
+    del assembler
     done = set(out[id_col].unique()) if len(out) else set()
     logger.info('forecast_many: %d series (%d via Prophet.fit) in %d tasks on %d worker '
                 'process(es) (%s), %d skipped', len(ids), len(stan_ids), len(tasks), n_jobs,
@@ -180,9 +266,6 @@ def _forecast(
     out.attrs['seed'] = seed
     if not return_params:
         return out
-    params: dict[Hashable, dict[str, np.ndarray]] = {}
-    for _, p in parts:
-        params.update(cast(dict, p))
     return out, {sid: params[sid] for sid in ids if sid in params}
 
 
