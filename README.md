@@ -1,5 +1,10 @@
 # prophet-batch
 
+[![PyPI](https://img.shields.io/pypi/v/prophet-batch)](https://pypi.org/project/prophet-batch/)
+[![Python](https://img.shields.io/pypi/pyversions/prophet-batch)](https://pypi.org/project/prophet-batch/)
+[![CI](https://github.com/sumedhekaru/prophet-batch/actions/workflows/ci.yml/badge.svg)](https://github.com/sumedhekaru/prophet-batch/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/pypi/l/prophet-batch)](https://github.com/sumedhekaru/prophet-batch/blob/main/LICENSE)
+
 **Forecast thousands to millions of series with [Prophet](https://github.com/facebook/prophet), about 10× faster than
 a stock Prophet process pool on the same cores, with the same accuracy.** prophet-batch runs on top of the stock
 `prophet` package (≥ 1.5): your models stay ordinary `Prophet` objects, and your data stays in your hands.
@@ -12,13 +17,15 @@ a stock Prophet process pool on the same cores, with the same accuracy.** prophe
 - **`cross_validation_many`** and **`predict`**: stock-format cross-validation for many models, and stock's predict
   with a seedable generator and faster history intervals for one.
 
+**See it in use:** [prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples): runnable use cases
+with accuracy and speed against stock Prophet. Walmart grocery forecasting on a laptop, in Docker, as a Cloud Run job
+and on Spark (Dataproc); six public forecasting datasets; and a large CSV forecast in batches with flat memory.
+
 ## Results
 
 1,437 Walmart grocery items (M5, FOODS, daily, 28 days ahead), default `Prophet()`, fit + forecast, against stock
 Prophet run the way people parallelize it: a process pool on every core. prophet-batch 0.1.1 from PyPI, median of 3
 runs ([all tables, and the code to rerun them](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting)):
-
-![Fit + forecast of 1,437 Walmart items, seconds: stock Prophet in a process pool vs prophet-batch on the same cores, on five platforms; prophet-batch is 8.6 to 11.6 times faster](https://raw.githubusercontent.com/sumedhekaru/prophet-batch/main/docs/images/speed.png)
 
 | environment | stock Prophet, process pool | prophet-batch | faster |
 |---|---:|---:|---:|
@@ -61,8 +68,6 @@ loading, the same for both.
   CPU limits. CI on Linux, macOS and Windows, Python 3.10–3.13.
 
 Guarantees and the tests behind them: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md).
-Runnable use cases with accuracy and speed on macOS, Windows, Linux, Cloud Run and Spark:
-[prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples).
 
 Status: alpha (0.1.1): the public API (below) is stable in intent but may still change before 1.0.
 
@@ -91,6 +96,17 @@ def make_series(n, seed):
 
 df = pd.concat([make_series(400, i).assign(unique_id=f"store_{i}") for i in range(8)], ignore_index=True)
 ```
+
+Forecasts only, in one call (stock Prophet's columns, one long frame with the series id first):
+
+```python
+from prophet_batch import forecast_many
+
+fc = forecast_many(df, periods=28, seed=42, n_jobs=-1)
+fc[fc["unique_id"] == "store_0"][["ds", "yhat", "yhat_lower", "yhat_upper"]].tail()
+```
+
+Or keep the fitted models (ordinary `Prophet` objects) and forecast them:
 
 ```python
 from prophet_batch import fit_many, predict_many
