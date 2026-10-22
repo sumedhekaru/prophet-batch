@@ -134,16 +134,21 @@ A private context manager in `src/prophet_batch/batch.py`, e.g. `_reuse_stan_mod
         Accuracy table identical to the run before the change (WAPE 0.3438, MASE mean 1.4261, Δ MASE −0.0021 ±
         0.0023, coverage 0.719 / 0.720); all checks pass (bit-identical across n_jobs, lp ≥ Stan's on 100% of series,
         0 fallbacks). 11.5× is in line with macOS 10.2×, Linux container 8.6×, Cloud Run 10.6×.
-- [ ] 5. Push the branch (not `main`, no tag). Report: root cause recap, the change, before/after numbers, test
+- [x] 5. Push the branch (not `main`, no tag). Report: root cause recap, the change, before/after numbers, test
       summary. Then review from macOS: diff review, both test suites (`run_tests.sh`), CI on Linux/macOS/Windows,
       macOS numbers not worse.
 
       Windows side (2026-10-21): report sent; the first push was refused (credentials without write access), so the
       branch is pushed once the maintainer authenticates. Open: the push, the macOS review, `run_tests.sh`, CI, macOS
       numbers (maintainer).
-- [ ] 6. Release prep (after review): version 0.1.1 in `pyproject.toml` and `__init__.py`; README: replace the
+      macOS review (2026-10-21): diff OK, pyrefly 0, `run_tests.sh` 261 + 261, CI run 39715240388 13/13 green
+      (Linux, macOS, Windows), macOS fit_profile 200 items 1.1 s (1.2 s before). Fast-forward merged to `main` (ffe2f64).
+- [x] 6. Release prep (after review): version 0.1.1 in `pyproject.toml` and `__init__.py`; README: replace the
       "Windows speed (known issue in 0.1.0)" note with a short note that 0.1.1 fixed it, with the measured numbers.
       The release itself (tag `v0.1.1` → TestPyPI → maintainer approval → PyPI) is done by the maintainer.
+      Done (2026-10-21): version 0.1.1; README Limitations: the known-issue note replaced by the fix with the numbers
+      above, plus "fewer workers are often faster for small jobs, especially on Windows" (400 items: 4 workers 5.8 s,
+      16 workers 11.0 s).
 
 ## Rules for this work
 

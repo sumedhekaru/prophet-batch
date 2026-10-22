@@ -16,7 +16,7 @@ Guarantees and how they are tested: [docs/guarantees.md](https://github.com/sume
 and speed against stock Prophet on macOS, Windows, Linux (Docker), Cloud Run and Spark (Dataproc):
 [prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples).
 
-Status: alpha (0.1.0): the public API (below) is stable in intent but may still change before 1.0.
+Status: alpha (0.1.1): the public API (below) is stable in intent but may still change before 1.0.
 
 ## Install
 
@@ -159,11 +159,14 @@ between releases.
 - Logistic growth, MCMC and regressor predictors are fit by Stan (correct, but not faster than stock).
 - Prediction intervals are about 0.04–0.6 percentage points narrower than stock's on public data: the exact MAP
   fits a little tighter than Stan's L-BFGS, which stops short of the optimum.
-- With few, short series, process start-up dominates: use `n_jobs=1` there.
-- **Windows speed (known issue in 0.1.0):** results are correct on Windows (CI runs the full suite there), but on a
-  first Windows laptop (Intel Core i7-1260P, 16 logical CPUs) `fit_many` scaled poorly: 3–4× faster than a 16-process
-  stock Prophet pool on 1,437 M5 items, against 9–10× on macOS, and slower with 16 workers than with 1 for a model
-  with regressors. The cause is being investigated (BLAS threading is the main suspect); a fix is planned for 0.1.1.
+- With few, short series, process start-up dominates: use `n_jobs=1` there. For small jobs, fewer workers are often
+  faster than `n_jobs=-1`, especially on Windows, where each worker is a newly started process that imports Prophet
+  (Windows laptop, 400 items: 5.8 s with 4 workers vs 11.0 s with 16).
+- **Windows speed (fixed in 0.1.1):** 0.1.0 was slow on Windows because cmdstanpy starts a `where.exe` process each
+  time a Prophet model is created there (≈ 100 ms per model). Since 0.1.1, `fit_many` and `cross_validation_many`
+  reuse one loaded Stan model per process; results are unchanged. On a Windows laptop (Intel Core i7-1260P, 16
+  logical CPUs), 1,437 M5 items: 3.1× → 11.5× faster than a 16-process stock Prophet pool (total 125.8 s → 30.3 s),
+  in line with macOS (10.2×) and Linux (8.6×). Stock Prophet on Windows still pays this cost per model.
 
 More: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md) (what is guaranteed and how it is tested) and
 [docs/migration.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/migration.md) (from a stock loop or process pool).
