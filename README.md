@@ -69,7 +69,7 @@ loading, the same for both.
 
 Guarantees and the tests behind them: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md).
 
-Status: alpha (0.1.1): the public API (below) is stable in intent but may still change before 1.0. What changed in each
+Status: alpha (0.1.2): the public API (below) is stable in intent but may still change before 1.0. What changed in each
 release: [CHANGELOG.md](https://github.com/sumedhekaru/prophet-batch/blob/main/CHANGELOG.md).
 
 ## Install

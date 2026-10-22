@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import prophet
 import prophet_batch
-from prophet_batch import cross_validation_many, fit_many, predict, predict_many
+from prophet_batch import Pool, cross_validation_many, fit_many, forecast_many, predict, predict_many
 
 
 def series(n, seed):
@@ -33,8 +33,17 @@ def main():
     cv = cross_validation_many({k: models[k] for k in ['s0', 's1']}, horizon='14 days', period='60 days',
                                initial='250 days', seed=1)
     assert all(len(df) > 0 for df in cv.values())
+    # forecast_many (0.1.2): equal to fit_many + predict_many per series; a Pool gives the same
+    cols = ['ds', 'yhat', 'yhat_lower', 'yhat_upper']
+    long_fc = forecast_many(long_df, periods=14, seed=1, n_jobs=2, history_uncertainty='analytic', columns=cols)
+    with Pool(n_jobs=2) as pool:
+        pooled = pool.submit(long_df, periods=14, seed=1, history_uncertainty='analytic', columns=cols).result()
+    for sid, g in long_fc.groupby('unique_id', sort=False):
+        pd.testing.assert_frame_equal(g[cols].reset_index(drop=True), fc[sid][cols].reset_index(drop=True))
+    pd.testing.assert_frame_equal(pooled, long_fc)
     print(f'ok: prophet {prophet.__version__}, prophet-batch {prophet_batch.__version__}, '
-          f'{len(models)} series, forecast rows {len(one)}, cv rows {sum(len(d) for d in cv.values())}')
+          f'{len(models)} series, forecast rows {len(one)}, cv rows {sum(len(d) for d in cv.values())}, '
+          f'forecast_many rows {len(long_fc)}')
 
 
 if __name__ == '__main__':
