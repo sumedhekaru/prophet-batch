@@ -17,7 +17,7 @@ w-step is an exact active-set method (feature-sign search), batched over series.
 Only the sufficient statistics Zᵀ Z, Zᵀ y, yᵀ y and T are needed per series.
 
 Public API: fit_many, predict_many, cross_validation_many and series_rng, re-exported by
-prophet_batch. The solvers and helpers here are internal and may change between releases.
+prophet_batch (forecast_many and Pool live in prophet_batch._forecast). The solvers and helpers here are internal and may change between releases.
 """
 
 from __future__ import annotations
@@ -707,6 +707,21 @@ _BATCH_CAP = 100
 _MEMORY_SHARE = 0.5
 
 
+def _kwargs_for(fit_kwargs: _FitKwargs) -> Callable[[Hashable], dict[str, Any]]:
+    """fit_kwargs (None, a dict, or series_id -> dict) as a function of the series id."""
+    if fit_kwargs is None:
+        return _no_fit_kwargs
+    if callable(fit_kwargs):
+        return fit_kwargs
+    if isinstance(fit_kwargs, dict):
+        fixed = fit_kwargs
+
+        def kwargs_for(series_id: Hashable) -> dict[str, Any]:
+            return fixed
+        return kwargs_for
+    raise ValueError('fit_kwargs must be a dict or a callable series_id -> dict.')
+
+
 def _check_batch_size(batch_size: int | None) -> None:
     if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int)
                                    or batch_size < 1):
@@ -1046,36 +1061,25 @@ def _split_stan_series(
     return stan_ids, rest
 
 
-def _fit_many_parallel(
+def _plan_tasks(
     df: pd.DataFrame,
     id_col: str,
     make_model: Callable[[Hashable], Prophet] | None,
-    n_jobs: int,
     prophet_kwargs: dict[str, Any],
-    on_error: str,
-    fit_kwargs: _FitKwargs,
     kwargs_for: Callable[[Hashable], dict[str, Any]],
     batch_size: int | None,
-) -> dict[Hashable, Prophet]:
-    """fit_many with n_jobs > 1: fit batches of consecutive series in a process pool."""
+    n_jobs: int,
+) -> tuple[Mapping[Hashable, Any], list[Hashable], list[Hashable], list[list[Hashable]], str]:
+    """Split the series of df into worker tasks: (rows by id, ids, Stan-fit ids, tasks, note).
+
+    Stan-fit series cost ~100x a batched one, so contiguous chunks could leave one worker
+    with most of them. They go out first, as small tasks of their own; batched series keep
+    contiguous batches (results don't depend on batch mates), sized like fit_many's.
+    """
     from prophet.forecaster import Prophet
 
-    for name, fn in (('make_model', make_model), ('fit_kwargs', fit_kwargs)):
-        if fn is None:
-            continue
-        try:
-            pickle.dumps(fn)
-        except Exception as e:
-            raise ValueError(
-                f'With n_jobs != 1, {name} must be picklable (a module-level function, '
-                'not a lambda or closure).'
-            ) from e
     rows_by_id = df.groupby(id_col, sort=False).indices
     ids = list(rows_by_id)
-    # Stan-fit series cost ~100x a batched one, so contiguous chunks could leave one worker
-    # with most of them. They go out first, as small tasks of their own; batched series keep
-    # contiguous chunks (results don't depend on chunk mates), enough of them to balance
-    # workers of different speeds.
     stan_ids, batch_ids = _split_stan_series(ids, make_model, prophet_kwargs)
     tasks: list[list[Hashable]] = []
     if stan_ids:
@@ -1091,6 +1095,33 @@ def _fit_many_parallel(
         planned, note = _batch_plan(df, id_col, batch_ids, rows_by_id, build, kwargs_for,
                                     batch_size, n_jobs)
         tasks += planned
+    return rows_by_id, ids, stan_ids, tasks, note
+
+
+def _fit_many_parallel(
+    df: pd.DataFrame,
+    id_col: str,
+    make_model: Callable[[Hashable], Prophet] | None,
+    n_jobs: int,
+    prophet_kwargs: dict[str, Any],
+    on_error: str,
+    fit_kwargs: _FitKwargs,
+    kwargs_for: Callable[[Hashable], dict[str, Any]],
+    batch_size: int | None,
+) -> dict[Hashable, Prophet]:
+    """fit_many with n_jobs > 1: fit batches of consecutive series in a process pool."""
+    for name, fn in (('make_model', make_model), ('fit_kwargs', fit_kwargs)):
+        if fn is None:
+            continue
+        try:
+            pickle.dumps(fn)
+        except Exception as e:
+            raise ValueError(
+                f'With n_jobs != 1, {name} must be picklable (a module-level function, '
+                'not a lambda or closure).'
+            ) from e
+    rows_by_id, ids, stan_ids, tasks, note = _plan_tasks(df, id_col, make_model, prophet_kwargs,
+                                                         kwargs_for, batch_size, n_jobs)
 
     from collections import deque
     from concurrent.futures import Future, ProcessPoolExecutor
@@ -1184,17 +1215,7 @@ def fit_many(
     if on_error not in ('raise', 'skip'):
         raise ValueError(f"on_error must be 'raise' or 'skip', got {on_error!r}.")
     _check_batch_size(batch_size)
-    if fit_kwargs is None:
-        kwargs_for = _no_fit_kwargs
-    elif callable(fit_kwargs):
-        kwargs_for = fit_kwargs
-    elif isinstance(fit_kwargs, dict):
-        fixed = fit_kwargs
-
-        def kwargs_for(series_id: Hashable) -> dict[str, Any]:
-            return fixed
-    else:
-        raise ValueError('fit_kwargs must be a dict or a callable series_id -> dict.')
+    kwargs_for = _kwargs_for(fit_kwargs)
     if ('ds' not in df) or ('y' not in df):
         raise ValueError('Dataframe must have columns "ds" and "y" with the dates and '
                          'values respectively.')
@@ -1843,6 +1864,14 @@ def _cached_features(self: Prophet, df: pd.DataFrame) -> Any:
     return self.__dict__['_feature_cache'].features(self, df)
 
 
+def _keep_columns(columns: str | Sequence[str] | None) -> list[str] | None:
+    """predict_many's columns argument as a list (None: every column)."""
+    keep = [columns] if isinstance(columns, str) else None if columns is None else list(columns)
+    if keep is not None and (not keep or not all(isinstance(c, str) for c in keep)):
+        raise ValueError('columns must be a column name or a non-empty list of names.')
+    return keep
+
+
 def _select_columns(
     sid: Hashable, forecast: pd.DataFrame, columns: list[str] | None
 ) -> pd.DataFrame:
@@ -1913,9 +1942,7 @@ def predict_many(
     """
     if (futures is None) == (periods is None):
         raise ValueError('Pass exactly one of futures or periods.')
-    keep = [columns] if isinstance(columns, str) else None if columns is None else list(columns)
-    if keep is not None and (not keep or not all(isinstance(c, str) for c in keep)):
-        raise ValueError('columns must be a column name or a non-empty list of names.')
+    keep = _keep_columns(columns)
     if seed is None:
         # Without arguments, SeedSequence draws a fresh int.
         seed = cast(int, np.random.SeedSequence().entropy)
