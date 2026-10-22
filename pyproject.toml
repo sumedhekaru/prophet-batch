@@ -36,6 +36,7 @@ Homepage = "https://github.com/sumedhekaru/prophet-batch"
 Documentation = "https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md"
 Examples = "https://github.com/sumedhekaru/prophet-batch-examples"
 Issues = "https://github.com/sumedhekaru/prophet-batch/issues"
+Changelog = "https://github.com/sumedhekaru/prophet-batch/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,53 @@
+# Changelog
+
+All notable changes to prophet-batch. Versions follow [semantic versioning](https://semver.org/); before 1.0 the public
+API may still change between minor versions.
+
+## 0.1.2 (unreleased)
+
+### Added
+
+- **`forecast_many(df, periods=..., ...)`**: fit and forecast many series in one step, returning one long DataFrame
+  with the series id first and, for each series, exactly the columns stock Prophet's
+  `model.predict(model.make_future_dataframe(periods))` returns. Equal to `predict_many(fit_many(df), ...)` for each
+  series and seed, bit for bit; no fitted model is kept or sent between processes. `futures=` (a long frame with the
+  id column, or a dict) for regressors and caps; `return_params=True` also returns each series' `model.params`;
+  `columns=`, `include_history=False` and `history_uncertainty="analytic"` trim the output without changing values.
+- **`Pool(n_jobs=...)`**: worker processes kept across `forecast_many` calls, for forecasting many batches (read from
+  your own files or database) without paying process start-up each time; `pool.submit(...)` returns a
+  `concurrent.futures.Future`, so reading and writing can overlap with computing.
+- **`batch_size`** on `fit_many` and `cross_validation_many` (and `forecast_many`): the most series a worker prepares
+  and solves at once. By default chosen automatically: up to 100 series (larger batches are not faster), at least four
+  tasks per worker, and small enough that the batches in flight use at most half of the available memory (container
+  limits included). Results are bit-identical for any `batch_size`.
+
+### Changed
+
+- **Faster parallel fits.** `fit_many(n_jobs > 1)` fits in smaller batches and no longer copies the whole input before
+  starting the workers: on 30,490 M5 item × store series (10 workers, Apple M4) 31.3 → 23.2 s; on 15,000 series the
+  parent's memory peak during the fit 6.8 → 4.4 GB.
+- **No second model build for scheduling.** The parallel path used to build every series' model once in the parent
+  (to send Stan-fit series first) before starting the workers; with a `make_model` that calls `add_country_holidays`
+  this doubled model construction (≈ 150 s for 30,490 series). It now runs only in parallel runs and within a 1 s
+  budget: on a model with US holidays and a regressor, `fit_many(n_jobs=10)` 5.18 → 3.34 s for 1,000 series.
+- `fit_many(n_jobs=1)` fits in batches too (same results), which keeps memory bounded for long series.
+
+### Fixed
+
+- Large parallel fits held each worker's whole share of the series at once (n / 4·workers series): memory per worker
+  grew with the dataset. Workers now hold one bounded batch at a time.
+
+## 0.1.1 (2026-10-22)
+
+### Fixed
+
+- **Windows speed.** cmdstanpy starts a `where.exe` process each time a Prophet model is created on Windows (≈ 100 ms
+  per model), which dominated `fit_many` there. `fit_many` and `cross_validation_many` now reuse one loaded Stan model
+  per process (results unchanged): on a Windows laptop (i7-1260P, 16 threads, 1,437 M5 items) 3.1× → 11.6× faster
+  than a 16-process stock Prophet pool.
+
+## 0.1.0 (2026-10-22)
+
+First release: `fit_many` (batched exact MAP fits, at least Stan's log posterior), `predict_many` (parallel, seeded
+per series), `cross_validation_many` (stock format) and `predict` (seedable, with analytic history intervals), on top
+of stock `prophet` ≥ 1.5. Python 3.10–3.13 on Linux, macOS and Windows.
