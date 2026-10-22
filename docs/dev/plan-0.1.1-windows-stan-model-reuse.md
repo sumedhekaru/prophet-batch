@@ -1,0 +1,86 @@
+# Plan: 0.1.1, reuse the loaded Stan model (Windows speed fix)
+
+Status: approved (2026-10-21), to be implemented on branch `fix/windows-model-reuse`. Work one step at a time; tick
+each step and add its result (numbers, commit) before the next.
+
+## Problem and root cause (measured)
+
+On a Windows laptop (Intel i7-1260P, 16 logical CPUs, Python 3.12.10, prophet 1.5.0, cmdstanpy 1.3.0), `fit_many`
+with `n_jobs=1` took **24.8 s for 200 M5 items** (default model), against 1.2 s on an Apple M4. Profile:
+
+| where the time goes | time |
+|---|---:|
+| `Prophet.__init__` → `_load_stan_backend` → `CmdStanModel.__init__` → `do_command` (201 calls, ≈ 107 ms each) | 21.5 s (87%) |
+| everything else (`_preprocess_shared` 1.6 s, `solve_map` 0.7 s, `to_datetime` 0.7 s, …) | ≈ 3.3 s |
+
+- **cmdstanpy 1.3.0** (`cmdstanpy/model.py`, in `CmdStanModel.__init__`): on Windows, *every* `CmdStanModel(...)` runs
+  `where.exe tbb.dll` as a separate process (≈ 111 ms on that machine; starting any process costs ≈ 30 ms there).
+- **Prophet 1.5.0** (`prophet/models.py`): every `Prophet()` creates a `CmdStanPyBackend`, whose `__init__` calls
+  `load_model()`, which builds a new `cmdstanpy.CmdStanModel(exe_file=...)`: always the same compiled model.
+- **prophet-batch** creates one `Prophet()` per series (and `cross_validation_many` one per series × cutoff) and does
+  only milliseconds of its own work per series, so this ≈ 100 ms dominates. Stock Prophet pays it too, behind ≈ 1 s
+  of Stan per series.
+- Measured `Prophet()` cost elsewhere: macOS 0.04 ms, Linux 0.03 ms. With cmdstanpy's Windows check bypassed (a
+  test-only patch) `Prophet()` took 0.4 ms on the Windows machine: the extra ≈ 50× is entirely this check.
+- Not the cause: BLAS threading (OPENBLAS/OMP threads = 1 changed little).
+- Likely the same cause: `events_snap` (with `make_model`) getting slower with more workers (many processes launching
+  `where.exe` at once); confirm with the measurements below.
+
+## Decision (user, 2026-10-21)
+
+- **A (this plan):** work around it in prophet-batch: while prophet-batch creates models, reuse **one loaded
+  `CmdStanModel` per process** instead of letting every `Prophet()` reload it. Release as 0.1.1.
+- **B (separate, not in this branch):** report upstream as drafts, held until the user decides to post: cmdstanpy
+  ("run the tbb.dll PATH check once per process") and Prophet ("load the compiled model once per process").
+
+## Design (A)
+
+A private context manager in `src/prophet_batch/batch.py`, e.g. `_reuse_stan_model()`:
+
+- While active, `prophet.models.CmdStanPyBackend.load_model` is replaced by a wrapper that returns a **per-process
+  cached** model: the first call loads it with the original method; later calls return the same object.
+- **Only the compiled-model handle is shared.** Every `Prophet` still gets its own `CmdStanPyBackend` instance (its
+  own `stan_fit`, `newton_fallback`), so no fit state is shared. `CmdStanModel` runs (optimize/sample) write to new
+  output directories each time, so sharing the handle between sequential fits is safe.
+- **Scope:** active only inside `fit_many` (the in-process path and each worker's `_fit_chunk`) and
+  `cross_validation_many` (which builds models via `prophet_copy`); restored on exit, also on exceptions. Nesting is
+  allowed (a depth counter; only the outermost exit restores). Guard with a lock, since the patch is class-level.
+- **Defensive:** if `prophet.models.CmdStanPyBackend` or its `load_model` is missing or has a different shape (future
+  Prophet), do nothing. A subclass that overrides `load_model` is not affected (only the exact class attribute is
+  patched).
+- **Off switch:** a module constant (e.g. `_REUSE_STAN_MODEL = True`) so tests can compare with and without.
+- Keep the change minimal; match the surrounding style (typed, single quotes, docstrings as in the file).
+
+## Steps
+
+- [ ] 1. Baseline on the Windows machine, before any change (record numbers in this file):
+      `fit_profile.py --model default --n 200`, `fit_profile.py --model events_snap --n 200`,
+      `fit_scaling.py --model default --jobs 1,4,16 --n 400`, `fit_scaling.py --model events_snap --jobs 1,4,16 --n 400`
+      (all from prophet-batch-examples), and the time of `[Prophet() for _ in range(100)]`.
+- [ ] 2. Implement the context manager and use it in `fit_many` / `_fit_chunk` / `cross_validation_many`.
+- [ ] 3. Tests (new, in `tests/`; they run on every OS, no Windows-only assumptions):
+      - fitted parameters identical with and without reuse (`_REUSE_STAN_MODEL` False vs True), incl. a mixed batch
+        (additive, multiplicative, logistic → Stan fallback, constant series);
+      - Stan-fallback series give exactly `Prophet.fit`'s result inside the reuse scope;
+      - `load_model` is called at most once per process during one `fit_many` of many series (count calls);
+      - every model has its own backend object (no shared `stan_fit`);
+      - after `fit_many` / `cross_validation_many` return (and after one raises), `CmdStanPyBackend.load_model` is the
+        original function again;
+      - `cross_validation_many` output unchanged with and without reuse.
+      Full suite green on Windows (`pytest -q`, both with and without `-p no:faulthandler` noted).
+- [ ] 4. Measure after the change on Windows (same commands as step 1) and one full
+      `run.py --model default` on all 1,437 items; expected: `Prophet()` construction no longer dominates; speed-ups vs
+      the stock pool similar to other platforms (macOS 10.2×, Linux container 8.6×, Cloud Run 10.6×).
+- [ ] 5. Push the branch (not `main`, no tag). Report: root cause recap, the change, before/after numbers, test
+      summary. Then review from macOS: diff review, both test suites (`run_tests.sh`), CI on Linux/macOS/Windows,
+      macOS numbers not worse.
+- [ ] 6. Release prep (after review): version 0.1.1 in `pyproject.toml` and `__init__.py`; README: replace the
+      "Windows speed (known issue in 0.1.0)" note with a short note that 0.1.1 fixed it, with the measured numbers.
+      The release itself (tag `v0.1.1` → TestPyPI → maintainer approval → PyPI) is done by the maintainer.
+
+## Rules for this work
+
+- Commits: one-line messages, author Sumedhe Karunarathne <sumedhekaru@gmail.com>; no other trailers.
+- Measure before changing; report numbers, not impressions; say plainly if something could not be verified.
+- Do not merge to `main`, do not tag, do not publish.
+- If the change turns out to need more than this design (e.g. Prophet internals differ), stop and report.
