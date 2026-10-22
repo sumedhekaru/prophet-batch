@@ -160,6 +160,10 @@ between releases.
 - Prediction intervals are about 0.04–0.6 percentage points narrower than stock's on public data: the exact MAP
   fits a little tighter than Stan's L-BFGS, which stops short of the optimum.
 - With few, short series, process start-up dominates: use `n_jobs=1` there.
+- **Windows speed (known issue in 0.1.0):** results are correct on Windows (CI runs the full suite there), but on a
+  first Windows laptop (Intel Core i7-1260P, 16 logical CPUs) `fit_many` scaled poorly: 3–4× faster than a 16-process
+  stock Prophet pool on 1,437 M5 items, against 9–10× on macOS, and slower with 16 workers than with 1 for a model
+  with regressors. The cause is being investigated (BLAS threading is the main suspect); a fix is planned for 0.1.1.
 
 More: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md) (what is guaranteed and how it is tested) and
 [docs/migration.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/migration.md) (from a stock loop or process pool).

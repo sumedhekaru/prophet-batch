@@ -16,8 +16,9 @@ WORKSPACE = Path(__file__).resolve().parents[2]
 logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
 logging.getLogger("prophet").setLevel(logging.WARNING)
 
-# Bit-for-bit fingerprints hold on the machine that made them: Stan's fits
-# differ in the last bits across platforms and BLAS/libm builds. CI runners (CI=true) skip those tests.
+# Bit-for-bit fingerprints hold only on the machine that made them: Stan's fits and libm differ in the last bits
+# across platforms and BLAS/libm builds. Opt-in (run_tests.sh sets it on the development machine); skipped
+# everywhere else: CI, users running the suite from the sdist, other platforms.
 machine_baseline = pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="bit-for-bit baseline from the development machine; not comparable on CI runners")
+    os.environ.get("PROPHET_BATCH_MACHINE_BASELINES") != "1",
+    reason="bit-for-bit baseline from the development machine; set PROPHET_BATCH_MACHINE_BASELINES=1 there")

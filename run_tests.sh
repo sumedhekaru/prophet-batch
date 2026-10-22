@@ -5,6 +5,8 @@
 set -eu
 PKG="$(cd "$(dirname "$0")" && pwd)"
 cd "$PKG"
+# This is the development machine: also run the bit-for-bit baseline tests (tests/conftest.py).
+export PROPHET_BATCH_MACHINE_BASELINES="${PROPHET_BATCH_MACHINE_BASELINES:-1}"
 WORKSPACE="$(dirname "$PKG")"
 if [ -d "$WORKSPACE/prophet-dev" ] && [ -f "$WORKSPACE/pyproject.toml" ]; then
     echo "== workspace env (prophet-dev fork)"
