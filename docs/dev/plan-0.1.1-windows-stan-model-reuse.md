@@ -73,7 +73,15 @@ A private context manager in `src/prophet_batch/batch.py`, e.g. `_reuse_stan_mod
       - Same machine, earlier the same day (b00e7c9..5ee32a0): default 200 items 24.8 s; scaling default 83.3 / 38.0 /
         33.5 s, events_snap 88.9 / 113.0 / 105.7 s. Absolute times vary by ~30% between runs on this laptop; the
         shape (events_snap slower with more workers, Prophet() ≈ 100+ ms) is stable.
-- [ ] 2. Implement the context manager and use it in `fit_many` / `_fit_chunk` / `cross_validation_many`.
+- [x] 2. Implement the context manager and use it in `fit_many` / `_fit_chunk` / `cross_validation_many`.
+
+      Result: `_reuse_stan_model()` in `batch.py` (after `_resolve_n_jobs`), applied as a decorator to `fit_many` and
+      `cross_validation_many` (a `contextmanager` makes a fresh context per call). That covers `_fit_chunk` and the
+      `cross_validation_many` workers (`_cv_group`), which both go through `fit_many`, and nested calls (depth counter).
+      The cache is keyed by the original `load_model` function; the patch is skipped unless
+      `getattr_static(CmdStanPyBackend, 'load_model')` is a plain function. Smoke check on Windows:
+      `[Prophet() for _ in range(100)]` inside the scope **0.198 s** (vs 11.32 s); one shared `CmdStanModel`, separate
+      backends; original restored after nested exit and after an exception.
 - [ ] 3. Tests (new, in `tests/`; they run on every OS, no Windows-only assumptions):
       - fitted parameters identical with and without reuse (`_REUSE_STAN_MODEL` False vs True), incl. a mixed batch
         (additive, multiplicative, logistic → Stan fallback, constant series);

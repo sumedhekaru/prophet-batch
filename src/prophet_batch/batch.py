@@ -24,15 +24,18 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import inspect
 import logging
 import os
 import pickle
+import threading
 from collections import OrderedDict
+from contextlib import contextmanager
 from copy import copy, deepcopy
 from inspect import getattr_static
 from typing import (
-    TYPE_CHECKING, Any, Callable, Hashable, Iterable, Literal, Mapping, Sequence, TypeVar,
-    cast,
+    TYPE_CHECKING, Any, Callable, Generator, Hashable, Iterable, Literal, Mapping, Sequence,
+    TypeVar, cast,
 )
 
 import numpy as np
@@ -697,6 +700,58 @@ def _resolve_n_jobs(n_jobs: int) -> int:
     return _available_cpus() if n_jobs == -1 else max(1, int(n_jobs))
 
 
+# Every Prophet() loads its compiled Stan model: CmdStanPyBackend.load_model builds a new
+# cmdstanpy.CmdStanModel, which on Windows starts a process (cmdstanpy 1.3: `where.exe
+# tbb.dll`, ~100 ms). fit_many creates one Prophet per series, so while it runs the loaded
+# model is reused, one per process. Only the compiled-model handle is shared: every Prophet
+# keeps its own backend and fit state. False turns the reuse off (for tests).
+_REUSE_STAN_MODEL = True
+_stan_model_lock = threading.Lock()
+_stan_model_depth = 0
+_stan_model_original: Any = None
+# Loaded models, by the load_model function that loaded them.
+_stan_models: dict[Any, Any] = {}
+
+
+def _cached_load_model(self: Any) -> Any:
+    """CmdStanPyBackend.load_model inside _reuse_stan_model: loads once, then reuses."""
+    with _stan_model_lock:
+        if _stan_model_original not in _stan_models:
+            _stan_models[_stan_model_original] = _stan_model_original(self)
+        return _stan_models[_stan_model_original]
+
+
+@contextmanager
+def _reuse_stan_model() -> Generator[None, None, None]:
+    """While active, Prophet() reuses this process's loaded Stan model (see _REUSE_STAN_MODEL).
+
+    Patches prophet.models.CmdStanPyBackend.load_model and restores it on exit, also on
+    errors; nested uses restore at the outermost exit. Does nothing if the backend class or
+    its load_model isn't a plain method (another Prophet version).
+    """
+    global _stan_model_depth, _stan_model_original
+    import prophet.models
+
+    backend = getattr(prophet.models, 'CmdStanPyBackend', None)
+    original = getattr_static(backend, 'load_model', None) if backend is not None else None
+    if not (_REUSE_STAN_MODEL and inspect.isfunction(original)):
+        yield
+        return
+    with _stan_model_lock:
+        if _stan_model_depth == 0:
+            _stan_model_original = original
+            setattr(backend, 'load_model', _cached_load_model)
+        _stan_model_depth += 1
+    try:
+        yield
+    finally:
+        with _stan_model_lock:
+            _stan_model_depth -= 1
+            if _stan_model_depth == 0:
+                setattr(backend, 'load_model', _stan_model_original)
+                _stan_model_original = None
+
+
 def _no_fit_kwargs(series_id: Hashable) -> dict[str, Any]:
     return {}
 
@@ -881,6 +936,7 @@ def _fit_many_parallel(
     return {sid: models[sid] for sid in ids if sid in models}
 
 
+@_reuse_stan_model()
 def fit_many(
     df: pd.DataFrame,
     id_col: str = 'unique_id',
@@ -1816,6 +1872,7 @@ def _cv_group(
     return out
 
 
+@_reuse_stan_model()
 def cross_validation_many(
     models: Mapping[Hashable, Prophet],
     horizon: str | pd.Timedelta,
