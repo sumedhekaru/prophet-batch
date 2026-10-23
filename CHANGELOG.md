@@ -11,6 +11,7 @@ API may still change between minor versions.
   series streamed), the comparison against stock Prophet's fastest setup, and credit to O. Matar for the lasso
   formulation of Prophet's MAP and the vectorized predict now in Prophet.
 - README: an "Examples and benchmarks" section pointing to the companion repository's use cases.
+- README: a link to the article on Medium.
 
 ## 0.1.2 (2026-10-22)
 

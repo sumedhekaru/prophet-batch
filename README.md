@@ -17,6 +17,8 @@ a stock Prophet process pool on the same cores, with the same accuracy.** prophe
 - **`cross_validation_many`** and **`predict`**: stock-format cross-validation for many models, and stock's predict
   with a seedable generator and faster history intervals for one.
 
+**Read the story:** [Up to 37× faster Prophet: fitting thousands of series in one call](https://medium.com/@sumedhekaru/up-to-37-faster-prophet-fitting-thousands-of-series-in-one-call-f532fae5c9e7) (Medium): the problem, how it works, and the benchmarks.
+
 **See it in use:** [prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples): runnable use cases
 with accuracy and speed against stock Prophet. Walmart grocery forecasting on a laptop, in Docker, as a Cloud Run job
 and on Spark (Dataproc); six public forecasting datasets; and a large CSV forecast in batches with flat memory.
