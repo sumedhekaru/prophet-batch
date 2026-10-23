@@ -5,7 +5,7 @@
 [![CI](https://github.com/sumedhekaru/prophet-batch/actions/workflows/ci.yml/badge.svg)](https://github.com/sumedhekaru/prophet-batch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/pypi/l/prophet-batch)](https://github.com/sumedhekaru/prophet-batch/blob/main/LICENSE)
 
-**Forecast thousands to millions of series with [Prophet](https://github.com/facebook/prophet), about 10× faster than
+**Forecast thousands to millions of series with [Prophet](https://github.com/facebook/prophet), 10–37× faster than
 a stock Prophet process pool on the same cores, with the same accuracy.** prophet-batch runs on top of the stock
 `prophet` package (≥ 1.5): your models stay ordinary `Prophet` objects, and your data stays in your hands.
 
@@ -23,35 +23,42 @@ and on Spark (Dataproc); six public forecasting datasets; and a large CSV foreca
 
 ## Results
 
-1,437 Walmart grocery items (M5, FOODS, daily, 28 days ahead), default `Prophet()`, fit + forecast, against stock
-Prophet run the way people parallelize it: a process pool on every core. prophet-batch 0.1.1 from PyPI, median of 3
-runs ([all tables, and the code to rerun them](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting)):
+1,437 Walmart grocery items (M5, FOODS, daily, 28 days ahead), default `Prophet()`, fit + forecast with
+`forecast_many` (analytic history intervals), against stock Prophet run the way people parallelize it: a process pool
+on every core. prophet-batch 0.1.2 from PyPI, median of 3 runs ([all tables, and the code to rerun
+them](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting)):
 
 | environment | stock Prophet, process pool | prophet-batch | faster |
 |---|---:|---:|---:|
-| MacBook, Apple M4, 10 cores | 53.1 s | 5.2 s | **10.2×** |
-| Linux container (Docker), same Mac | 57.2 s | 6.7 s | **8.6×** |
-| Cloud Run job, 4 vCPU | 254.4 s | 23.6 s | **10.9×** |
-| Windows laptop, Intel i7-1260P, 16 threads | 298.9 s | 25.8 s | **11.6×** |
-| Spark on Dataproc Serverless, 2 × 4 cores (execution¹) | 234.5 s | 24.2 s | **9.7×** |
+| MacBook, Apple M4, 10 cores | 55.5 s | 4.1 s | **13.6×** |
+| Linux container (Docker), same Mac | 59.2 s | 5.0 s | **11.5×** |
+| Cloud Run job, 4 vCPU | 249.1 s | 20.4 s | **13.0×** |
+| Windows laptop, Intel i7-1260P, 16 threads | 397.4 s | 23.4 s | **15.8×** |
+| Spark on Dataproc Serverless, 2 × 4 cores (execution¹) | 244.1 s | 25.0 s | **9.8×** |
 
-¹ The Spark job's execution phase; end to end 1.9×, because each batch also spends ≈ 185 s on platform start-up and
-loading, the same for both.
+¹ The Spark job's execution phase (`fit_many` + `predict_many` per group); end to end 2.2×, because each batch also
+spends ≈ 130 s on platform start-up, loading and warm-up, the same for both. On larger jobs the end-to-end gain grows:
+6.7× on 30,490 series ([Spark results](https://github.com/sumedhekaru/prophet-batch-examples/blob/main/public_datasets/results/dataproc-us-east1.md)).
 
-- **Same accuracy:** WAPE 0.3438 vs 0.3446, MASE 1.4261 vs 1.4279 (difference within noise), on every platform;
-  with holidays and with holidays + regressors as well (7.4–11.2× there).
-- **Six public datasets** (M5 item and item × store, M4 Daily, Weekly, Hourly, Tourism Monthly: 38,905 series, the
-  same 10 workers; measured before the first release, re-run on 0.1.2 to come): the same holdout accuracy, slightly
-  better beyond noise on four of them, and 1.5× (short series) to **26.5×** (M4 Daily, long series) faster with full
-  history intervals.
-- **At scale:** 15,000 item × store series in one call (Apple M4; four forecast columns, analytic history
-  intervals): `forecast_many` 26.5 s and 4.0 GB at peak, vs 33.7 s and 6.3 GB with `fit_many` + `predict_many`.
-  Streaming a CSV in batches through one `Pool`: the file grew 8.7× (169 MB → 1.5 GB), memory 0.44 → 0.55 GB.
+- **Same accuracy:** WAPE 0.3438 vs 0.3446, MASE 1.4261 vs 1.4279 (difference within noise), on every platform; with
+  holidays and with holidays + regressors as well (10.2–13.2× there).
+- **Fair comparisons:** with default settings (history intervals simulated like stock) the gain is 3.2–4.8×; against
+  stock Prophet's fastest setup (future rows only, prophet-batch the same) it stays 11–39× on the public datasets
+  ([page](https://github.com/sumedhekaru/prophet-batch-examples/blob/main/public_datasets/results/future-only-macos-m4.md)). Prophet ≥ 1.1.2 already includes the vectorized predict
+  of O. Matar (2021), so these gains come on top of it.
+- **Six public datasets** (38,905 series: M5 item and item × store, M4 Daily, Weekly, Hourly, Tourism Monthly; Apple M4,
+  10 workers): **37×** on M4 Daily's long series, **15×** on 30,490 item × store series and on M5 items, 2.7–8× on the
+  small ones; accuracy slightly better beyond noise on four datasets and within noise on two; fit at least as good as
+  Stan's on 38,905 of 38,905 series ([results](https://github.com/sumedhekaru/prophet-batch-examples/blob/main/public_datasets/results/macos-m4.md); Linux, Cloud Run and Spark
+  pages next to it). On one core, fit + forecast is 17× faster than stock: the gain is in the work, not the parallelism.
+- **At scale:** 1,000,072 series streamed from one file through a `Pool` in 33 minutes on the MacBook, with ≈ 2 GB of
+  memory in total, the same as for 3,000 series ([streaming example](https://github.com/sumedhekaru/prophet-batch-examples/blob/main/streaming_csv/results/macos-m4.md)).
 
 ## Why it is fast, and what you can rely on
 
-- **Exact batched fits.** For Prophet's linear-growth model the MAP is a convex problem (a lasso on the changepoints
-  from their Laplace prior), solved exactly for many series at once; multiplicative seasonality by a verified
+- **Exact batched fits.** For Prophet's linear-growth model the MAP is a regularized regression (a lasso on the
+  changepoints from their Laplace prior, ridge on the rest), as O. Matar noted in 2022 when approximating it; here
+  that convex problem is solved exactly for many series at once (feature-sign search); multiplicative seasonality by a verified
   Gauss–Newton refinement. Stan's L-BFGS stops a little short of that optimum, so prophet-batch's fits come out at
   least as good: on every series of every benchmark so far. Logistic growth, MCMC and regressor predictors go to
   Stan, with exactly its result.

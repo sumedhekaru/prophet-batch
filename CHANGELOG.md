@@ -3,6 +3,14 @@
 All notable changes to prophet-batch. Versions follow [semantic versioning](https://semver.org/); before 1.0 the public
 API may still change between minor versions.
 
+## Unreleased
+
+### Documentation
+
+- README results on 0.1.2 from PyPI (`forecast_many`, five platforms, six public datasets, Spark at scale, a million
+  series streamed), the comparison against stock Prophet's fastest setup, and credit to O. Matar for the lasso
+  formulation of Prophet's MAP and the vectorized predict now in Prophet.
+
 ## 0.1.2 (2026-10-22)
 
 ### Added
