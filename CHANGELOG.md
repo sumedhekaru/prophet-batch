@@ -10,6 +10,7 @@ API may still change between minor versions.
 - README results on 0.1.2 from PyPI (`forecast_many`, five platforms, six public datasets, Spark at scale, a million
   series streamed), the comparison against stock Prophet's fastest setup, and credit to O. Matar for the lasso
   formulation of Prophet's MAP and the vectorized predict now in Prophet.
+- README: an "Examples and benchmarks" section pointing to the companion repository's use cases.
 
 ## 0.1.2 (2026-10-22)
 

@@ -54,6 +54,18 @@ spends ≈ 130 s on platform start-up, loading and warm-up, the same for both. O
 - **At scale:** 1,000,072 series streamed from one file through a `Pool` in 33 minutes on the MacBook, with ≈ 2 GB of
   memory in total, the same as for 3,000 series ([streaming example](https://github.com/sumedhekaru/prophet-batch-examples/blob/main/streaming_csv/results/macos-m4.md)).
 
+## Examples and benchmarks
+
+[prophet-batch-examples](https://github.com/sumedhekaru/prophet-batch-examples) is the companion repository: runnable use cases that install prophet-batch from PyPI
+and report accuracy and speed against stock Prophet, with one command per environment (laptop, Docker, Cloud Run job,
+Spark on Dataproc) and every result page reproducible from its run records.
+
+| use case | what it shows |
+|---|---|
+| [walmart_grocery_forecasting](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting) | 1,437 Walmart grocery items, three models (default, holidays, holidays + regressors), on macOS, Linux, Windows, Cloud Run and Spark |
+| [public_datasets](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/public_datasets) | six public datasets (38,905 series): accuracy, fit quality vs Stan, speed at scale, scaling with series and workers |
+| [streaming_csv](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/streaming_csv) | a file of any size forecast in batches through one `Pool` with bounded memory: a million series on a laptop |
+
 ## Why it is fast, and what you can rely on
 
 - **Exact batched fits.** For Prophet's linear-growth model the MAP is a regularized regression (a lasso on the
