@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Callable, Hashable, Literal, Mapping, Seq
 import numpy as np
 import pandas as pd
 
+from prophet_batch._holidays import fast_holidays
 from prophet_batch.batch import (
     _check_batch_size, _keep_columns, _kwargs_for, _plan_tasks, _predict_chunk, _resolve_n_jobs,
     _reuse_stan_model, fit_many,
@@ -282,6 +283,7 @@ def _warm_worker() -> None:
     import prophet.forecaster  # noqa: F401
 
 
+@fast_holidays()
 @_reuse_stan_model()
 def forecast_many(
     df: pd.DataFrame,
@@ -384,6 +386,7 @@ class Pool:
                 if self.n_jobs > 1:
                     self._executor = _spawn_executor(self.n_jobs)
 
+    @fast_holidays()
     @_reuse_stan_model()
     def forecast_many(
         self,

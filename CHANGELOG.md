@@ -9,6 +9,10 @@ API may still change between minor versions.
 
 - `fit_many` / `forecast_many` on a single series no longer preprocess it twice (the memory estimate for automatic
   batch sizes did it once more): 1.2–1.6× faster per call on a wide weekly multiplicative model; results unchanged.
+- Holiday features are built with a vectorized, bit-identical version of Prophet's `make_holiday_features` inside
+  prophet-batch's calls (Prophet's own looks up every holiday date and window offset one at a time): preprocessing a
+  model with 6 holidays over 22 years and ±15-day windows takes 7 ms instead of 55 ms. It is used only when the
+  installed Prophet's function is the one it mirrors (1.5.0); subclasses that override it keep theirs.
 
 ### Documentation
 

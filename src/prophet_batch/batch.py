@@ -44,6 +44,7 @@ import pandas as pd
 
 from prophet.models import ModelInputData, TrendIndicator
 
+from prophet_batch._holidays import fast_holidays
 from prophet_batch._predict import predict
 
 if TYPE_CHECKING:
@@ -1168,6 +1169,7 @@ def _fit_many_parallel(
     return {sid: models[sid] for sid in ids if sid in models}
 
 
+@fast_holidays()
 @_reuse_stan_model()
 def fit_many(
     df: pd.DataFrame,
@@ -1904,6 +1906,7 @@ def _select_columns(
     return forecast[columns]
 
 
+@fast_holidays()
 def _predict_chunk(
     items: Sequence[tuple[Hashable, Prophet, pd.DataFrame]],
     seed: int,
@@ -1924,6 +1927,7 @@ def _predict_chunk(
     ]
 
 
+@fast_holidays()
 def predict_many(
     models: Mapping[Hashable, Prophet],
     futures: Mapping[Hashable, pd.DataFrame] | None = None,
@@ -2077,6 +2081,7 @@ class _CopyAtCutoff:
         return self.models[cast(tuple, key)[0]].fit_kwargs
 
 
+@fast_holidays()
 def _cv_group(
     items: Sequence[tuple[Hashable, Prophet]],
     horizon: pd.Timedelta,
@@ -2139,6 +2144,7 @@ def _cv_group(
     return out
 
 
+@fast_holidays()
 @_reuse_stan_model()
 def cross_validation_many(
     models: Mapping[Hashable, Prophet],

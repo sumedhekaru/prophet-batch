@@ -11,6 +11,7 @@ import inspect
 import warnings
 from typing import TYPE_CHECKING, Any, Literal
 
+from prophet_batch._holidays import fast_holidays
 from prophet_batch._seeded import seeded
 
 if TYPE_CHECKING:
@@ -25,6 +26,7 @@ def has_native_hooks(model: Prophet) -> bool:
     return 'rng' in params and 'history_uncertainty' in params
 
 
+@fast_holidays()
 def predict(
     model: Prophet,
     df: pd.DataFrame | None = None,
