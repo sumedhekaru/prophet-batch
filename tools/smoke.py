@@ -46,6 +46,14 @@ def main():
     with prophet_batch.reuse_stan_model():
         own = prophet.Prophet().fit(series(400, 0))
     np.testing.assert_array_equal(stan['s0'].params['k'], own.params['k'])
+    # history intervals (0.1.3): order statistics by default, 'sampled' every path; same yhat, similar widths
+    default = predict_many(models, periods=14, seed=1)
+    sampled = predict_many(models, periods=14, seed=1, history_uncertainty='sampled')
+    for sid in models:
+        d, s = default[sid], sampled[sid]
+        pd.testing.assert_series_equal(d['yhat'], s['yhat'])
+        width = [(f['yhat_upper'] - f['yhat_lower']).iloc[:-14].mean() for f in (d, s)]
+        assert 0.9 < width[0] / width[1] < 1.1, (sid, width)
     print(f'ok: prophet {prophet.__version__}, prophet-batch {prophet_batch.__version__}, '
           f'{len(models)} series, forecast rows {len(one)}, cv rows {sum(len(d) for d in cv.values())}, '
           f'forecast_many rows {len(long_fc)}')
