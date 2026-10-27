@@ -584,6 +584,8 @@ def _config(model: Prophet) -> dict[str, Any]:
 
 def _same(a: Any, b: Any) -> bool:
     """Exact equality of model state: DataFrames, Series, arrays, dicts (in order), scalars."""
+    if a is b:
+        return True
     if type(a) is not type(b):
         return False
     if isinstance(a, (pd.DataFrame, pd.Series)):
@@ -598,8 +600,6 @@ def _same(a: Any, b: Any) -> bool:
         return list(a) == list(b) and all(_same(a[k], b[k]) for k in a)
     if isinstance(a, (list, tuple)):
         return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
-    if a is b:
-        return True
     try:
         return bool(a == b) or (a != a and b != b)  # NaN == NaN here
     except Exception:
@@ -1955,15 +1955,39 @@ def _predict_chunk(
     """Worker: predict a list of (series_id, model, future) with per-series generators.
 
     Models with the same configuration and future share their feature matrices; with
-    columns, only those forecast columns are kept (and sent back).
+    columns, only those forecast columns are kept (and sent back), and when they need no
+    individual component, only the additive and multiplicative totals are computed.
     """
     cache = _FeatureCache()
+    totals_only = columns is not None and set(columns) <= _TOTALS_COLUMNS
     return [
         (sid, _select_columns(sid, predict(
-            cache.attach(model), future, history_uncertainty=history_uncertainty,
-            rng=series_rng(seed, sid)), columns))
+            cache.attach(_totals_only(model) if totals_only else model), future,
+            history_uncertainty=history_uncertainty, rng=series_rng(seed, sid)), columns))
         for sid, model, future in items
     ]
+
+
+# Forecast columns that need no individual seasonal, holiday or regressor component.
+_TOTALS_COLUMNS = frozenset(
+    ['ds', 'yhat', 'cap', 'floor']
+    + [f'{c}{b}' for c in ('yhat', 'trend', 'additive_terms', 'multiplicative_terms')
+       for b in ('', '_lower', '_upper')]
+)
+
+
+def _totals_only(model: Prophet) -> Prophet:
+    """A shallow copy of model whose predict computes only the additive and multiplicative
+    totals among the components (Prophet computes each component separately, so these and
+    yhat are unchanged), or the model itself when that doesn't apply.
+    """
+    cols = model.train_component_cols
+    totals = ['additive_terms', 'multiplicative_terms']
+    if cols is None or not all(c in cols.columns for c in totals) or len(cols.columns) == 2:
+        return model
+    view = copy(model)
+    view.train_component_cols = cols[totals]
+    return view
 
 
 @fast_holidays()

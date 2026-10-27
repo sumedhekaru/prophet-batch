@@ -8,6 +8,7 @@ import pytest
 from api import fit_many, predict_many, series_rng
 
 from synthetic import make_series
+from predict_scenarios import SCENARIOS, build as build_scenario
 from api import predict  # noqa: E402
 
 
@@ -224,6 +225,35 @@ class TestColumns:
     def test_missing_column_names_the_series(self, models):
         with pytest.raises(ValueError, match=r"series 's0'.*\['nope'\]"):
             predict_many(models, periods=7, seed=1, columns=["yhat", "nope"])
+
+    TOTALS = ["ds", "trend", "trend_lower", "trend_upper", "yhat", "yhat_lower", "yhat_upper", "additive_terms",
+              "additive_terms_lower", "additive_terms_upper", "multiplicative_terms", "multiplicative_terms_lower",
+              "multiplicative_terms_upper"]
+
+    @pytest.mark.parametrize("history_uncertainty", [True, False, "analytic"])
+    @pytest.mark.parametrize("name", list(SCENARIOS))
+    def test_totals_only_equals_full_forecast(self, name, history_uncertainty):
+        # 0.1.3: columns needing no single component compute only the totals; identical values
+        from prophet import Prophet
+
+        if name == "not_vectorized" and history_uncertainty == "analytic":
+            pytest.skip("analytic needs the same sampling either way; covered by the other modes")
+        m, future, kwargs = build_scenario(name, Prophet)
+        models, futures = {"a": m}, {"a": future}
+        full = predict_many(models, futures=futures, seed=5, history_uncertainty=history_uncertainty)["a"]
+        cols = [c for c in self.TOTALS + ["cap"] if c in full.columns]
+        slim = predict_many(models, futures=futures, seed=5, history_uncertainty=history_uncertainty,
+                            columns=cols)["a"]
+        pd.testing.assert_frame_equal(slim, full[cols], check_exact=True)
+
+    def test_totals_only_view_leaves_model_unchanged(self, models):
+        from api import _totals_only
+
+        m = models["s0"]
+        before = list(m.train_component_cols.columns)
+        view = _totals_only(m)
+        assert list(view.train_component_cols.columns) == ["additive_terms", "multiplicative_terms"]
+        assert list(m.train_component_cols.columns) == before and view.params is m.params
 
     @pytest.mark.parametrize("bad", [[], ["yhat", 3]])
     def test_invalid_columns(self, models, bad):

@@ -23,6 +23,10 @@ API may still change between minor versions.
   prophet-batch's calls (Prophet's own looks up every holiday date and window offset one at a time): preprocessing a
   model with 6 holidays over 22 years and ±15-day windows takes 7 ms instead of 55 ms. It is used only when the
   installed Prophet's function is the one it mirrors (1.5.0); subclasses that override it keep theirs.
+- `predict_many` / `forecast_many` with `columns=` that need no individual component (`yhat`, `trend`,
+  `additive_terms`, `multiplicative_terms`, their bounds, `ds`, `cap`, `floor`) compute only the additive and
+  multiplicative totals, not every seasonality and holiday component: values unchanged, 20% faster predict on a model
+  with 7 holiday components.
 
 ### Documentation
 
