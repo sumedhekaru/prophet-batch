@@ -119,3 +119,25 @@ def test_cross_validation_many_identical_with_and_without_reuse(monkeypatch):
     assert list(out[False]) == list(out[True])
     for sid in out[False]:
         pd.testing.assert_frame_equal(out[False][sid], out[True][sid])
+
+
+def test_public_reuse_stan_model_around_own_fit_loop(monkeypatch):
+    # 0.1.3: a user's own Prophet.fit loop inside prophet_batch.reuse_stan_model() loads the model once
+    import prophet_batch
+
+    original = CmdStanPyBackend.load_model
+    calls = []
+
+    def counting(self):
+        calls.append(1)
+        return original(self)
+
+    monkeypatch.setattr(CmdStanPyBackend, "load_model", counting)
+    frames = {f"s{i}": make_series(n_days=200, seed=i) for i in range(4)}
+    with prophet_batch.reuse_stan_model():
+        fitted = {sid: Prophet().fit(f) for sid, f in frames.items()}
+    assert len(calls) == 1
+    assert CmdStanPyBackend.load_model is counting  # restored on exit
+    stock = {sid: Prophet().fit(f) for sid, f in frames.items()}
+    _assert_identical(fitted, stock)
+    assert MODULE._reuse_stan_model is prophet_batch.reuse_stan_model  # the old name, for one release
