@@ -168,6 +168,7 @@ with a warning, instead of raising), and `batch_size` (the most series a worker 
 `fit_many` and `cross_validation_many`). By default it is chosen automatically: up to 100 series (larger batches
 are not faster), fewer so every worker gets several tasks, and fewer again so the batches in flight use at most
 half of the available memory, which matters for long series. Results are bit-identical for any `batch_size`.
+`solver="stan"` fits every series by `Prophet.fit` instead (see "Choosing the solver" below).
 
 ### What is batched
 
@@ -176,6 +177,39 @@ Linear and flat growth are fit by the batched solvers, with any mix of additive 
 is a convex problem); multiplicative ones to a verified stationary point. Everything else (logistic growth,
 `mcmc_samples > 0`, regressors with `regressor_predictor`) and any series the solver can't handle is fit by
 `Prophet.fit` per series, with exactly the result of calling it directly.
+
+### Choosing the solver
+
+`solver="batch"` (the default) is right for most workloads: many series of the same shape are solved together, and
+on every public benchmark it is several times faster than Stan. Its cost per series falls as more series of the
+same length and configuration are solved together, because its dense linear algebra is shared across them. Stan's
+L-BFGS never forms those matrices, so for one series at a time with many parameters it can be the faster choice:
+
+| workload (weekly, multiplicative, 6 holidays ± 15 days, 233 parameters) | `solver="batch"` | `solver="stan"` | stock `Prophet.fit` |
+|---|---|---|---|
+| 32 series of one length, per series | 28 ms | 31 ms | 81 ms |
+| one series alone (e.g. backtest cutoffs, each its own length) | 71 ms | 30 ms | 80 ms |
+
+(Apple M4, 104 weekly rows, `fit_kwargs={"algorithm": "LBFGS", "iter": 1000, "tol_obj": 1e-9}`, one process.)
+`solver="stan"` fits every series exactly as `Prophet.fit` does (bit for bit, with your `fit_kwargs`), loads Stan's
+model once per process, and builds holiday features with prophet-batch's faster code, so it is faster than stock
+Prophet too. Use it when your series are fit one at a time and the model is wide (many holiday or regressor columns
+relative to the history length), or when you need Stan's exact fit. Otherwise, put more series in each call: a
+catalog of items on one calendar is batched by length, so passing all items' cutoffs together helps more than
+switching solvers.
+
+```python
+fc = forecast_many(df, periods=13, freq="W-SAT", make_model=make_model, solver="stan", seed=0)
+```
+
+To reuse Stan's loaded model in your own loop of `Prophet.fit` calls, wrap it in `prophet_batch.reuse_stan_model()`:
+
+```python
+import prophet_batch
+
+with prophet_batch.reuse_stan_model():   # the compiled model is loaded once in this process
+    models = {sid: make_model(sid).fit(g.drop(columns="unique_id")) for sid, g in df.groupby("unique_id")}
+```
 
 ### Forecasts and history intervals
 
@@ -202,6 +236,20 @@ results back, which saves memory and time (M5, 1,437 series with 30 holidays: 2.
 
 ```python
 forecasts = predict_many(models, periods=28, seed=42, columns=["ds", "yhat", "yhat_lower", "yhat_upper"])
+```
+
+When the columns you ask for need no single seasonality, holiday or regressor component (`yhat`, `trend`,
+`additive_terms`, `multiplicative_terms`, their bounds, `ds`, `cap`, `floor`), only the totals are computed, with the
+same values.
+
+Different horizons per series: pass each series its own future frame.
+
+```python
+horizon = {"store_0": 7, "store_1": 28, "store_2": 90}          # days ahead, per series
+last = df.groupby("unique_id")["ds"].max()
+futures = {sid: pd.DataFrame({"ds": pd.date_range(last[sid], periods=h + 1, freq="D")[1:]})
+           for sid, h in horizon.items()}
+fc = forecast_many(df, futures=futures, seed=0, columns=["ds", "yhat", "yhat_lower", "yhat_upper"])
 ```
 
 ### Large catalogs: forecast_many and Pool
@@ -277,13 +325,17 @@ composition. Without a seed, a fresh one is drawn, logged, and stored in each fo
 ## API stability
 
 The public API is what `prophet_batch` exports at the top level: `fit_many`, `predict_many`, `forecast_many`,
-`Pool`, `cross_validation_many`, `predict` and `series_rng`. Everything else (the solvers and helpers in
+`Pool`, `cross_validation_many`, `predict`, `reuse_stan_model` and `series_rng`. Everything else (the solvers and helpers in
 `prophet_batch.batch`, such as `solve_map` or `log_posterior`, and the private modules) is internal and may change
 between releases.
 
 ## Limitations
 
 - Logistic growth, MCMC and regressor predictors are fit by Stan (correct, but not faster than stock).
+- **Wide models fit one series at a time**: the batched solver's cost grows with the cube of the number of
+  parameters, and it is shared only among series of the same length. A multiplicative weekly model with 233
+  parameters fit alone takes 71 ms with the batched solver vs 30 ms with `solver="stan"`. See "Choosing the
+  solver".
 - Prediction intervals are about 0.04–0.6 percentage points narrower than stock's on public data: the exact MAP
   fits a little tighter than Stan's L-BFGS, which stops short of the optimum.
 - **Memory**: each worker holds one batch at a time (about 0.5–0.6 GB per worker for M5's 1,941-day series), but

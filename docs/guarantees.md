@@ -17,6 +17,15 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
 - **Shared work does not change results**: series with identical models, dates and regressor values share their
   preprocessing in `fit_many` and their feature matrices in `predict_many`; fits and forecasts are bit-identical to
   doing it per series. `tests/test_fit_many.py::TestSharedDates`, `tests/test_predict_many.py::TestFeatureCache`
+- **`solver="stan"` is `Prophet.fit`**: every series is fit by `make_model(sid).fit(series_df, **fit_kwargs)`, bit for
+  bit, for any `n_jobs` and `batch_size`. `tests/test_solver.py`
+- **Faster holiday features, same values**: inside prophet-batch's calls, Prophet's `make_holiday_features` is replaced
+  by a vectorized version with bit-identical output (columns, order, prior scales, errors), only when the installed
+  function's source is the one it mirrors (prophet 1.5.0); otherwise Prophet's own is used.
+  `tests/test_holidays.py`
+- **`columns=` does not change values**: when the requested columns need no single component, only the component
+  totals are computed; the requested columns are bit-identical to the full forecast's, for every model kind and
+  history mode. `tests/test_predict_many.py::TestColumns::test_totals_only_equals_full_forecast`
 - **Invalid series behave as in `Prophet.fit`**: the same error (with the series id in the message), or, with
   `on_error="skip"`, the series is left out with a warning. `tests/test_edge_cases.py::test_same_behavior_as_prophet_fit`,
   `tests/test_fit_many.py::TestOnError`
@@ -88,12 +97,18 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
   `forecaster.py`, and its forecasts equal the fork's for the same seed in every scenario and history mode.
   `tests/test_predict.py::test_seeded_matches_fork`,
   `tests/test_predict.py::test_generated_module_is_in_sync_with_fork`
-- **Prophet is never modified**: seeded predictions use a subclass view of the model.
-  `tests/test_predict.py::test_seeded_view_shares_state_and_leaves_model_alone`
+- **Prophet's code is never modified on disk, and models are left alone**: seeded predictions use a subclass view
+  of the model. `tests/test_predict.py::test_seeded_view_shares_state_and_leaves_model_alone`. Two class attributes
+  are swapped only while a prophet-batch call (or `reuse_stan_model()`) runs, and restored on exit, also on errors:
+  `CmdStanPyBackend.load_model` (one loaded Stan model per process; `tests/test_stan_model_reuse.py`) and
+  `Prophet.make_holiday_features` (the bit-identical vectorized version; subclasses that override it keep theirs;
+  `tests/test_holidays.py`). Other threads using Prophet during such a call see the same results.
 
 ## Limitations
 
 - **Not batched**: logistic growth, MCMC, regressor predictors. They are fit by Stan (correct, not faster than stock).
+- **Wide models fit one series at a time** can be faster with `solver="stan"` (README, "Choosing the solver"); the
+  default is not switched automatically, because a series' solver must not depend on its batch mates.
 - **Slightly narrower intervals**: on six public datasets, 80% intervals covered 0.04–0.6 percentage points less than
   stock's. The exact MAP fits a little tighter (smaller sigma_obs, sparser trend changes) than Stan's L-BFGS, which
   stops short of the optimum. Point accuracy is the same (holdout MASE within ±1.3%).
