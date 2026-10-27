@@ -3,7 +3,7 @@
 All notable changes to prophet-batch. Versions follow [semantic versioning](https://semver.org/); before 1.0 the public
 API may still change between minor versions.
 
-## 0.1.3 (2026-10-26)
+## 0.1.3 (2026-10-27)
 
 ### Added
 
