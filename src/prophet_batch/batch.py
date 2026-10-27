@@ -657,7 +657,7 @@ def _series_failed(sid: Hashable, e: Exception, on_error: str) -> None:
             e.args = (f'series {sid!r}: {first}',)
         else:
             # Structured args (e.g. OSError's errno, KeyError's key) are left intact.
-            logger.error('fit_many: series %r failed: %s: %s', sid, type(e).__name__, e)
+            logger.error('series %r failed: %s: %s', sid, type(e).__name__, e)
     else:
         logger.warning('fit_many: skipping series %r: %s: %s', sid, type(e).__name__, e)
 
@@ -721,6 +721,17 @@ def _kwargs_for(fit_kwargs: _FitKwargs) -> Callable[[Hashable], dict[str, Any]]:
             return fixed
         return kwargs_for
     raise ValueError('fit_kwargs must be a dict or a callable series_id -> dict.')
+
+
+def _check_ids(df: pd.DataFrame, id_col: str, name: str = 'Dataframe') -> None:
+    """Every row of df has a series id (groupby would drop rows with a missing one)."""
+    if id_col not in df:
+        raise ValueError(f'{name} has no id column {id_col!r}; pass id_col= to name it.')
+    n_missing = int(df[id_col].isna().sum())
+    if n_missing:
+        where = '' if name == 'Dataframe' else f' in {name}'
+        raise ValueError(f'{n_missing} rows have a missing {id_col}{where}; give every row a '
+                         'series id.')
 
 
 def _check_solver(solver: str) -> None:
@@ -1277,9 +1288,7 @@ def fit_many(
     if ('ds' not in df) or ('y' not in df):
         raise ValueError('Dataframe must have columns "ds" and "y" with the dates and '
                          'values respectively.')
-    n_missing = int(df[id_col].isna().sum())
-    if n_missing:
-        raise ValueError(f'{n_missing} rows have a missing {id_col}; give every row a series id.')
+    _check_ids(df, id_col)
     if make_model is None:
         Prophet(**prophet_kwargs)  # invalid configuration: raise now, for any n_jobs
     n_jobs = _resolve_n_jobs(n_jobs)
@@ -1960,12 +1969,17 @@ def _predict_chunk(
     """
     cache = _FeatureCache()
     totals_only = columns is not None and set(columns) <= _TOTALS_COLUMNS
-    return [
-        (sid, _select_columns(sid, predict(
-            cache.attach(_totals_only(model) if totals_only else model), future,
-            history_uncertainty=history_uncertainty, rng=series_rng(seed, sid)), columns))
-        for sid, model, future in items
-    ]
+    results = []
+    for sid, model, future in items:
+        try:
+            forecast = predict(cache.attach(_totals_only(model) if totals_only else model),
+                               future, history_uncertainty=history_uncertainty,
+                               rng=series_rng(seed, sid))
+        except Exception as e:
+            _series_failed(sid, e, 'raise')
+            raise
+        results.append((sid, _select_columns(sid, forecast, columns)))
+    return results
 
 
 # Forecast columns that need no individual seasonal, holiday or regressor component.

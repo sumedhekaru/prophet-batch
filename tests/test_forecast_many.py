@@ -161,6 +161,35 @@ def test_validation():
         forecast_many(df, periods=3, batch_size=0)
 
 
+def test_series_ids_checked():
+    """0.1.3 (M8d): rows with a missing id raise as in fit_many (they were dropped silently)."""
+    df = _long({"a": make_series(), "b": make_series(seed=1)})
+    holes = df.assign(unique_id=df["unique_id"].where(df.index % 50 != 0))
+    for fn in (fit_many, lambda d: forecast_many(d, periods=3, seed=0)):
+        with pytest.raises(ValueError, match=r"\d+ rows have a missing unique_id;"):
+            fn(holes)
+        with pytest.raises(ValueError, match="no id column 'unique_id'"):
+            fn(df.drop(columns="unique_id"))
+    future = df[["unique_id", "ds"]]
+    with pytest.raises(ValueError, match="rows have a missing unique_id in futures"):
+        forecast_many(df, futures=future.assign(unique_id=holes["unique_id"]), seed=0)
+    with pytest.raises(ValueError, match="futures has no id column"):
+        forecast_many(df, futures=future.drop(columns="unique_id"), seed=0)
+
+
+@pytest.mark.parametrize("n_jobs", [1, 2])
+def test_predict_error_names_the_series(n_jobs):
+    """0.1.3 (M8d): an error while predicting one series says which series it was."""
+    df = _long(_frames(with_futures=True))
+    models = fit_many(df, make_model=make_model)
+    futures = _futures(models, 14)
+    futures["reg0"].loc[len(futures["reg0"]) - 1, "promo"] = np.nan
+    with pytest.raises(ValueError, match=r"series 'reg0': Found NaN in column 'promo'"):
+        forecast_many(df, futures=futures, seed=0, make_model=make_model, n_jobs=n_jobs)
+    with pytest.raises(ValueError, match=r"series 'reg0': Found NaN in column 'promo'"):
+        predict_many(models, futures=futures, seed=0, n_jobs=n_jobs)
+
+
 def test_assembler_unexpected_row_counts_and_missing_series():
     """The output stays right when a series' row count differs from the expected one, or a series is missing."""
     from prophet_batch._forecast import _Assembler, _Part

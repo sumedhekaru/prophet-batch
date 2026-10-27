@@ -24,8 +24,8 @@ import pandas as pd
 
 from prophet_batch._holidays import fast_holidays
 from prophet_batch.batch import (
-    _check_batch_size, _check_solver, _keep_columns, _kwargs_for, _plan_tasks, _predict_chunk, _resolve_n_jobs,
-    fit_many, reuse_stan_model,
+    _check_batch_size, _check_ids, _check_solver, _keep_columns, _kwargs_for, _plan_tasks, _predict_chunk,
+    _resolve_n_jobs, fit_many, reuse_stan_model,
 )
 
 if TYPE_CHECKING:
@@ -197,6 +197,9 @@ def _forecast(
     if ('ds' not in df) or ('y' not in df):
         raise ValueError('Dataframe must have columns "ds" and "y" with the dates and '
                          'values respectively.')
+    _check_ids(df, id_col)
+    if isinstance(futures, pd.DataFrame):
+        _check_ids(futures, id_col, 'futures')
     if make_model is None:
         Prophet(**prophet_kwargs)  # invalid configuration: raise now
     if executor is not None:
@@ -212,8 +215,6 @@ def _forecast(
         logger.info('forecast_many: no seed given, using seed=%d', seed)
     future_by_id: Mapping[Hashable, pd.DataFrame] | None = None
     if isinstance(futures, pd.DataFrame):
-        if id_col not in futures:
-            raise ValueError(f'futures must have the id column {id_col!r}.')
         future_by_id = {sid: g.drop(columns=id_col).reset_index(drop=True)
                         for sid, g in futures.groupby(id_col, sort=False)}
     elif futures is not None:
