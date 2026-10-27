@@ -39,6 +39,22 @@ jobs:
             --with prophet==1.5.0 --with "$GITHUB_WORKSPACE"/dist/*.whl \
             python "$GITHUB_WORKSPACE"/tools/smoke.py
 
+  oldest:
+    # The oldest supported stack (requires-python and the numpy / pandas floors in pyproject): the matrix above
+    # resolves the newest versions only, and bugs on old pandas (categorical ids) went unseen there.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Tests (Python 3.10, numpy 1.21.6, pandas 1.3.5)
+        env:
+          OPENBLAS_NUM_THREADS: "1"  # numpy 1.x's OpenBLAS can hang on some CPUs (README, Limitations)
+        run: >
+          uv run --isolated --no-project --python 3.10
+          --with prophet==1.5.0 --with numpy==1.21.6 --with pandas==1.3.5 --with pytest --with pytest-timeout
+          --with-editable . pytest -q -p no:cacheprovider
+
   typecheck:
     runs-on: ubuntu-24.04
     steps:
