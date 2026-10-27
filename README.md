@@ -45,7 +45,8 @@ spends ≈ 130 s on platform start-up, loading and warm-up, the same for both. O
 - **Same accuracy:** WAPE 0.3438 vs 0.3446, MASE 1.4261 vs 1.4279 (difference within noise), on every platform; with
   holidays and with holidays + regressors as well (10.2–13.2× there).
 - **Fair comparisons:** with 0.1.2's default settings (history intervals simulated like stock) the gain was 3.2–4.8×;
-  0.1.3's default draws the history intervals from order statistics and is about as fast as the analytic mode; against
+  0.1.3's default draws them from order statistics, with the same distribution, and is as fast as the analytic mode
+  (300 items on the M4, `forecast_many`: 3.3–4.2× → 7.7–9.6×; analytic 7.7–9.7×); against
   stock Prophet's fastest setup (future rows only, prophet-batch the same) it stays 11–39× on the public datasets
   ([page](https://github.com/sumedhekaru/prophet-batch-examples/blob/main/public_datasets/results/future-only-macos-m4.md)). Prophet ≥ 1.1.2 already includes the vectorized predict
   of O. Matar (2021), so these gains come on top of it.
