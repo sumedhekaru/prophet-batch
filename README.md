@@ -242,14 +242,15 @@ When the columns you ask for need no single seasonality, holiday or regressor co
 `additive_terms`, `multiplicative_terms`, their bounds, `ds`, `cap`, `floor`), only the totals are computed, with the
 same values.
 
-Different horizons per series: pass each series its own future frame.
+Different horizons per series: pass each series its own future frame (every series in `df` needs one).
 
 ```python
 horizon = {"store_0": 7, "store_1": 28, "store_2": 90}          # days ahead, per series
-last = df.groupby("unique_id")["ds"].max()
+some = df[df["unique_id"].isin(horizon)]
+last = some.groupby("unique_id")["ds"].max()
 futures = {sid: pd.DataFrame({"ds": pd.date_range(last[sid], periods=h + 1, freq="D")[1:]})
            for sid, h in horizon.items()}
-fc = forecast_many(df, futures=futures, seed=0, columns=["ds", "yhat", "yhat_lower", "yhat_upper"])
+fc = forecast_many(some, futures=futures, seed=0, columns=["ds", "yhat", "yhat_lower", "yhat_upper"])
 ```
 
 ### Large catalogs: forecast_many and Pool

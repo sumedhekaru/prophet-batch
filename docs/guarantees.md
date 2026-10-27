@@ -30,8 +30,10 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
   `on_error="skip"`, the series is left out with a warning. `tests/test_edge_cases.py::test_same_behavior_as_prophet_fit`,
   `tests/test_fit_many.py::TestOnError`
 - **No input row is dropped silently**: rows with a missing series id raise a `ValueError` in `fit_many` and
-  `forecast_many` (also in a long `futures` frame), and an error while predicting a series names it.
-  `tests/test_forecast_many.py::test_series_ids_checked`, `::test_predict_error_names_the_series`
+  `forecast_many` (also in a long `futures` frame), and an error while predicting a series names it. With a
+  categorical id, only the ids present are series (unused categories are not), with any pandas version.
+  `tests/test_forecast_many.py::test_series_ids_checked`, `::test_predict_error_names_the_series`,
+  `::test_categorical_ids_with_unused_categories`
 
 ## Batched fits are verified optima
 
