@@ -5,6 +5,11 @@ API may still change between minor versions.
 
 ## Unreleased
 
+### Performance
+
+- `fit_many` / `forecast_many` on a single series no longer preprocess it twice (the memory estimate for automatic
+  batch sizes did it once more): 1.2–1.6× faster per call on a wide weekly multiplicative model; results unchanged.
+
 ### Documentation
 
 - README results on 0.1.2 from PyPI (`forecast_many`, five platforms, six public datasets, Spark at scale, a million

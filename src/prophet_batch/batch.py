@@ -862,7 +862,8 @@ def _batch_plan(
     avail = _available_memory()
     budget = _MEMORY_SHARE * avail / workers if avail is not None else None
     bytes_per_row = None
-    if budget is not None and ids:
+    # one series is one batch whatever its size: skip the estimate, which preprocesses it
+    if budget is not None and n > 1:
         first = ids[0]
         series_df = df.iloc[rows_by_id[first]].drop(columns=id_col).reset_index(drop=True)
         try:

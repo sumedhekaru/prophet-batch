@@ -162,6 +162,23 @@ class TestPlan:
         ref = fit_many(df, batch_size=10**6)
         _assert_identical(fit_many(df), ref)            # memory-limited automatic batches: same fits
 
+    def test_one_series_preprocessed_once(self, monkeypatch):
+        # the memory estimate preprocesses a series; with one series it can't change the plan
+        from api import MODULE
+
+        calls = []
+        original = Prophet.preprocess
+
+        def counting(self, df, **kwargs):
+            calls.append(len(df))
+            return original(self, df, **kwargs)
+
+        monkeypatch.setattr(MODULE, "_available_memory", lambda: 10**9)
+        monkeypatch.setattr(Prophet, "preprocess", counting)
+        df = _long({"a": make_series(n_days=200, seed=0)})
+        fit_many(df)
+        assert calls == [200]
+
 
 class TestAvailableMemory:
     @staticmethod
