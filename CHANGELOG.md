@@ -20,7 +20,6 @@ API may still change between minor versions.
 
 - **`history_uncertainty="sampled"`**: every path sampled, as stock Prophet and prophet-batch ≤ 0.1.2 (bit-identical
   draws for the same seed).
-
 - **`solver="batch" | "stan"`** on `fit_many`, `forecast_many` and `Pool.forecast_many`. `"batch"` (default) is
   unchanged; `"stan"` fits every series exactly as `Prophet.fit` (bit for bit, with `fit_kwargs`), with the Stan model
   loaded once per process and the faster holiday features below: 2.7× faster than stock `Prophet.fit` on a wide weekly
