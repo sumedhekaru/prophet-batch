@@ -90,7 +90,7 @@ Spark on Dataproc) and every result page reproducible from its run records.
 
 Guarantees and the tests behind them: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md).
 
-Status: alpha (0.1.2): the public API (below) is stable in intent but may still change before 1.0. What changed in each
+Status: alpha (0.1.3): the public API (below) is stable in intent but may still change before 1.0. What changed in each
 release: [CHANGELOG.md](https://github.com/sumedhekaru/prophet-batch/blob/main/CHANGELOG.md).
 
 ## Install

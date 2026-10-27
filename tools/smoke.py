@@ -41,6 +41,11 @@ def main():
     for sid, g in long_fc.groupby('unique_id', sort=False):
         pd.testing.assert_frame_equal(g[cols].reset_index(drop=True), fc[sid][cols].reset_index(drop=True))
     pd.testing.assert_frame_equal(pooled, long_fc)
+    # solver='stan' (0.1.3): Prophet.fit's result, Stan model loaded once (reuse_stan_model public)
+    stan = fit_many(long_df[long_df['unique_id'].isin(['s0', 's1'])], solver='stan')
+    with prophet_batch.reuse_stan_model():
+        own = prophet.Prophet().fit(series(400, 0))
+    np.testing.assert_array_equal(stan['s0'].params['k'], own.params['k'])
     print(f'ok: prophet {prophet.__version__}, prophet-batch {prophet_batch.__version__}, '
           f'{len(models)} series, forecast rows {len(one)}, cv rows {sum(len(d) for d in cv.values())}, '
           f'forecast_many rows {len(long_fc)}')
