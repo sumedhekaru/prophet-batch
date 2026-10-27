@@ -24,8 +24,8 @@ import pandas as pd
 
 from prophet_batch._holidays import fast_holidays
 from prophet_batch.batch import (
-    _check_batch_size, _keep_columns, _kwargs_for, _plan_tasks, _predict_chunk, _resolve_n_jobs,
-    _reuse_stan_model, fit_many,
+    _check_batch_size, _check_solver, _keep_columns, _kwargs_for, _plan_tasks, _predict_chunk, _resolve_n_jobs,
+    fit_many, reuse_stan_model,
 )
 
 if TYPE_CHECKING:
@@ -140,10 +140,12 @@ def _forecast_task(
     history_uncertainty: bool | Literal['analytic'],
     columns: list[str] | None,
     return_params: bool,
+    solver: str = 'batch',
 ) -> tuple[_Part, dict[Hashable, dict[str, np.ndarray]] | None]:
     """Worker: fit one batch of series and forecast them; the batch's forecasts as one _Part."""
     models = fit_many(df, id_col=id_col, make_model=make_model, on_error=on_error,
-                      fit_kwargs=fit_kwargs, batch_size=batch_size, **prophet_kwargs)
+                      fit_kwargs=fit_kwargs, batch_size=batch_size, solver=solver,
+                      **prophet_kwargs)
     items = []
     for sid, model in models.items():
         future = (futures[sid] if futures is not None
@@ -173,6 +175,7 @@ def _forecast(
     on_error: str,
     batch_size: int | None,
     prophet_kwargs: dict[str, Any],
+    solver: str = 'batch',
 ) -> pd.DataFrame | tuple[pd.DataFrame, dict[Hashable, dict[str, np.ndarray]]]:
     """forecast_many on an executor (None: in this process), with n_jobs workers."""
     import pickle
@@ -189,6 +192,7 @@ def _forecast(
     if on_error not in ('raise', 'skip'):
         raise ValueError(f"on_error must be 'raise' or 'skip', got {on_error!r}.")
     _check_batch_size(batch_size)
+    _check_solver(solver)
     kwargs_for = _kwargs_for(fit_kwargs)
     if ('ds' not in df) or ('y' not in df):
         raise ValueError('Dataframe must have columns "ds" and "y" with the dates and '
@@ -216,7 +220,7 @@ def _forecast(
         future_by_id = futures
 
     rows_by_id, ids, stan_ids, tasks, note = _plan_tasks(
-        df, id_col, make_model, prophet_kwargs, kwargs_for, batch_size, n_jobs)
+        df, id_col, make_model, prophet_kwargs, kwargs_for, batch_size, n_jobs, solver)
     if future_by_id is not None:
         missing = [sid for sid in ids if sid not in future_by_id]
         if missing:
@@ -226,7 +230,8 @@ def _forecast(
         chunk = df.iloc[np.sort(np.concatenate([rows_by_id[sid] for sid in task]))]
         sub = None if future_by_id is None else {sid: future_by_id[sid] for sid in task}
         return (chunk, id_col, make_model, prophet_kwargs, on_error, fit_kwargs, len(task), sub,
-                periods, freq, include_history, seed, history_uncertainty, keep, return_params)
+                periods, freq, include_history, seed, history_uncertainty, keep, return_params,
+                solver)
 
     # Rows per series in the output: its future frame, or its history rows (make_future_dataframe
     # takes the distinct history dates: the same unless dates repeat, which the assembler handles)
@@ -284,7 +289,7 @@ def _warm_worker() -> None:
 
 
 @fast_holidays()
-@_reuse_stan_model()
+@reuse_stan_model()
 def forecast_many(
     df: pd.DataFrame,
     periods: int | None = None,
@@ -301,6 +306,7 @@ def forecast_many(
     fit_kwargs: _FitKwargs = None,
     on_error: str = 'raise',
     batch_size: int | None = None,
+    solver: str = 'batch',
     **prophet_kwargs: Any,
 ) -> pd.DataFrame | tuple[pd.DataFrame, dict[Hashable, dict[str, np.ndarray]]]:
     """Fit and forecast many series in one step, returning one long DataFrame of forecasts.
@@ -327,7 +333,8 @@ def forecast_many(
         the id column is always kept).
     return_params: Also return each series' fitted parameters (model.params), as a dict
         mapping series id to the parameter dict.
-    id_col, make_model, fit_kwargs, on_error, batch_size, prophet_kwargs: As in fit_many.
+    id_col, make_model, fit_kwargs, on_error, batch_size, solver, prophet_kwargs: As in
+        fit_many.
         Skipped series (on_error='skip') are absent from the result.
 
     Returns
@@ -339,7 +346,8 @@ def forecast_many(
     """
     n_jobs = _resolve_n_jobs(n_jobs)
     args = (df, periods, futures, freq, include_history, seed, history_uncertainty, columns,
-            return_params, id_col, make_model, fit_kwargs, on_error, batch_size, prophet_kwargs)
+            return_params, id_col, make_model, fit_kwargs, on_error, batch_size, prophet_kwargs,
+            solver)
     if n_jobs == 1:
         return _forecast(None, 1, *args)
     executor = _spawn_executor(n_jobs)
@@ -387,7 +395,7 @@ class Pool:
                     self._executor = _spawn_executor(self.n_jobs)
 
     @fast_holidays()
-    @_reuse_stan_model()
+    @reuse_stan_model()
     def forecast_many(
         self,
         df: pd.DataFrame,
@@ -404,13 +412,14 @@ class Pool:
         fit_kwargs: _FitKwargs = None,
         on_error: str = 'raise',
         batch_size: int | None = None,
+        solver: str = 'batch',
         **prophet_kwargs: Any,
     ) -> pd.DataFrame | tuple[pd.DataFrame, dict[Hashable, dict[str, np.ndarray]]]:
         """forecast_many on this pool's workers (see prophet_batch.forecast_many)."""
         self._start()
         return _forecast(self._executor, self.n_jobs, df, periods, futures, freq, include_history,
                          seed, history_uncertainty, columns, return_params, id_col, make_model,
-                         fit_kwargs, on_error, batch_size, prophet_kwargs)
+                         fit_kwargs, on_error, batch_size, prophet_kwargs, solver)
 
     def submit(self, df: pd.DataFrame, **kwargs: Any) -> Future:
         """Start forecast_many(df, **kwargs) and return a Future of its result."""

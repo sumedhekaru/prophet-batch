@@ -723,6 +723,11 @@ def _kwargs_for(fit_kwargs: _FitKwargs) -> Callable[[Hashable], dict[str, Any]]:
     raise ValueError('fit_kwargs must be a dict or a callable series_id -> dict.')
 
 
+def _check_solver(solver: str) -> None:
+    if solver not in ('batch', 'stan'):
+        raise ValueError(f"solver must be 'batch' or 'stan', got {solver!r}.")
+
+
 def _check_batch_size(batch_size: int | None) -> None:
     if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int)
                                    or batch_size < 1):
@@ -891,7 +896,7 @@ _stan_models: dict[Any, Any] = {}
 
 
 def _cached_load_model(self: Any) -> Any:
-    """CmdStanPyBackend.load_model inside _reuse_stan_model: loads once, then reuses."""
+    """CmdStanPyBackend.load_model inside reuse_stan_model: loads once, then reuses."""
     with _stan_model_lock:
         if _stan_model_original not in _stan_models:
             _stan_models[_stan_model_original] = _stan_model_original(self)
@@ -899,8 +904,19 @@ def _cached_load_model(self: Any) -> Any:
 
 
 @contextmanager
-def _reuse_stan_model() -> Generator[None, None, None]:
-    """While active, Prophet() reuses this process's loaded Stan model (see _REUSE_STAN_MODEL).
+def reuse_stan_model() -> Generator[None, None, None]:
+    """Load Prophet's compiled Stan model once per process while active.
+
+    Every `Prophet()` loads the compiled Stan model, which costs ~100 ms on Windows
+    (cmdstanpy starts a process) and less elsewhere. Inside this context manager (or a
+    function decorated with it), Prophet objects created in this process reuse one loaded
+    model; each keeps its own backend and fit state, so fits are unchanged. fit_many,
+    forecast_many and cross_validation_many use it already; use it around your own loop of
+    `Prophet.fit` calls:
+
+        with prophet_batch.reuse_stan_model():
+            for sid, g in df.groupby('unique_id'):
+                models[sid] = Prophet(...).fit(g)
 
     Patches prophet.models.CmdStanPyBackend.load_model and restores it on exit, also on
     errors; nested uses restore at the outermost exit. Does nothing if the backend class or
@@ -929,6 +945,10 @@ def _reuse_stan_model() -> Generator[None, None, None]:
                 _stan_model_original = None
 
 
+# The name before 0.1.3, kept for one release.
+_reuse_stan_model = reuse_stan_model
+
+
 def _no_fit_kwargs(series_id: Hashable) -> dict[str, Any]:
     return {}
 
@@ -940,6 +960,7 @@ def _prepare(
     share: bool,
     on_error: str = 'raise',
     kwargs_for: Callable[[Hashable], dict[str, Any]] = _no_fit_kwargs,
+    stan: bool = False,
 ) -> tuple[
     list[Hashable],
     list[tuple[Hashable, Prophet, ModelInputData, np.ndarray, pd.DataFrame]],
@@ -952,6 +973,7 @@ def _prepare(
 
     With share, series whose unfitted models are identical and that have the same history
     dates and regressor / condition values reuse the preprocessing of the first of them.
+    With stan, every series goes to fallback (solver='stan').
 
     Returns
     -------
@@ -967,7 +989,7 @@ def _prepare(
         series_df = group.drop(columns=id_col).reset_index(drop=True)
         try:
             model = make_model(sid)
-            reason = unsupported_reason(model)
+            reason = "solver='stan'" if stan else unsupported_reason(model)
             if reason is not None:
                 fallback.append((sid, series_df, reason))
             else:
@@ -1031,11 +1053,13 @@ def _fit_chunk(
     on_error: str,
     fit_kwargs: _FitKwargs,
     batch_size: int | None = None,
+    solver: str = 'batch',
 ) -> dict[Hashable, Prophet]:
     """Worker for fit_many(n_jobs > 1): fit one chunk of series in this process."""
     # prophet_kwargs is empty when make_model is given (fit_many checks).
     return fit_many(chunk_df, id_col=id_col, make_model=make_model, on_error=on_error,
-                    fit_kwargs=fit_kwargs, batch_size=batch_size, **prophet_kwargs)
+                    fit_kwargs=fit_kwargs, batch_size=batch_size, solver=solver,
+                    **prophet_kwargs)
 
 
 # Seconds the parent may spend building models to find the Stan-fit series (scheduling only):
@@ -1087,6 +1111,7 @@ def _plan_tasks(
     kwargs_for: Callable[[Hashable], dict[str, Any]],
     batch_size: int | None,
     n_jobs: int,
+    solver: str = 'batch',
 ) -> tuple[Mapping[Hashable, Any], list[Hashable], list[Hashable], list[list[Hashable]], str]:
     """Split the series of df into worker tasks: (rows by id, ids, Stan-fit ids, tasks, note).
 
@@ -1098,7 +1123,9 @@ def _plan_tasks(
 
     rows_by_id = df.groupby(id_col, sort=False).indices
     ids = list(rows_by_id)
-    if n_jobs > 1:
+    if solver == 'stan':
+        stan_ids, batch_ids = ids, []
+    elif n_jobs > 1:
         stan_ids, batch_ids = _split_stan_series(ids, make_model, prophet_kwargs, _CLASSIFY_BUDGET)
     else:  # one process: the order of the work doesn't matter
         stan_ids, batch_ids = [], ids
@@ -1129,6 +1156,7 @@ def _fit_many_parallel(
     fit_kwargs: _FitKwargs,
     kwargs_for: Callable[[Hashable], dict[str, Any]],
     batch_size: int | None,
+    solver: str = 'batch',
 ) -> dict[Hashable, Prophet]:
     """fit_many with n_jobs > 1: fit batches of consecutive series in a process pool."""
     for name, fn in (('make_model', make_model), ('fit_kwargs', fit_kwargs)):
@@ -1142,7 +1170,7 @@ def _fit_many_parallel(
                 'not a lambda or closure).'
             ) from e
     rows_by_id, ids, stan_ids, tasks, note = _plan_tasks(df, id_col, make_model, prophet_kwargs,
-                                                         kwargs_for, batch_size, n_jobs)
+                                                         kwargs_for, batch_size, n_jobs, solver)
 
     from collections import deque
     from concurrent.futures import Future, ProcessPoolExecutor
@@ -1157,7 +1185,7 @@ def _fit_many_parallel(
         for task in tasks:
             chunk = df.iloc[np.sort(np.concatenate([rows_by_id[sid] for sid in task]))]
             pending.append(pool.submit(_fit_chunk, chunk, id_col, make_model, prophet_kwargs,
-                                       on_error, fit_kwargs, len(task)))
+                                       on_error, fit_kwargs, len(task), solver))
             del chunk
             if len(pending) >= 2 * n_jobs:
                 models.update(pending.popleft().result())
@@ -1170,7 +1198,7 @@ def _fit_many_parallel(
 
 
 @fast_holidays()
-@_reuse_stan_model()
+@reuse_stan_model()
 def fit_many(
     df: pd.DataFrame,
     id_col: str = 'unique_id',
@@ -1179,6 +1207,7 @@ def fit_many(
     on_error: str = 'raise',
     fit_kwargs: _FitKwargs = None,
     batch_size: int | None = None,
+    solver: str = 'batch',
     **prophet_kwargs: Any,
 ) -> dict[Hashable, Prophet]:
     """Fit one Prophet model per series, solving all supported series together.
@@ -1223,6 +1252,12 @@ def fit_many(
         fewer so that every worker gets several tasks, and fewer again so that the batches
         in flight use at most half of the available memory (long series get small
         batches). Results are bit-identical for any batch_size.
+    solver: 'batch' (default): the batched solvers above, Prophet.fit where they don't
+        apply. 'stan': every series by `make_model(sid).fit(series_df, **fit_kwargs)`,
+        exactly as calling Prophet.fit yourself, with the Stan model loaded once per
+        process and prophet-batch's faster holiday features. For models where Stan is
+        faster than the batched solver (wide multiplicative models fit one series at a
+        time; see the README's "Choosing the solver").
     prophet_kwargs: Passed to Prophet() when make_model is not given.
 
     Returns
@@ -1237,6 +1272,7 @@ def fit_many(
     if on_error not in ('raise', 'skip'):
         raise ValueError(f"on_error must be 'raise' or 'skip', got {on_error!r}.")
     _check_batch_size(batch_size)
+    _check_solver(solver)
     kwargs_for = _kwargs_for(fit_kwargs)
     if ('ds' not in df) or ('y' not in df):
         raise ValueError('Dataframe must have columns "ds" and "y" with the dates and '
@@ -1249,12 +1285,14 @@ def fit_many(
     n_jobs = _resolve_n_jobs(n_jobs)
     if n_jobs > 1:
         return _fit_many_parallel(df, id_col, make_model, n_jobs, prophet_kwargs, on_error,
-                                  fit_kwargs, kwargs_for, batch_size)
+                                  fit_kwargs, kwargs_for, batch_size, solver)
 
     if make_model is None:
         def make_model(series_id: Hashable) -> Prophet:
             return Prophet(**prophet_kwargs)
 
+    if solver == 'stan':  # one series at a time: no batches to size
+        return _fit_in_process(df, id_col, make_model, on_error, kwargs_for, stan=True)
     rows_by_id = df.groupby(id_col, sort=False).indices
     ids = list(rows_by_id)
     if batch_size is not None and len(ids) <= batch_size:
@@ -1280,11 +1318,12 @@ def _fit_in_process(
     on_error: str,
     kwargs_for: Callable[[Hashable], dict[str, Any]],
     log_level: int = logging.INFO,
+    stan: bool = False,
 ) -> dict[Hashable, Prophet]:
     """fit_many's work for one batch of series, in this process (its summary is logged at
-    log_level: DEBUG when fit_many runs several batches)."""
+    log_level: DEBUG when fit_many runs several batches); with stan, all by Prophet.fit."""
     order, batch, mult, constant, fallback, skipped = _prepare(
-        df, id_col, make_model, True, on_error, kwargs_for)
+        df, id_col, make_model, True, on_error, kwargs_for, stan)
     models = {sid: model for sid, model in constant}
 
     # Series are solved in groups of identical coordinate shape, so no series is padded
@@ -2145,7 +2184,7 @@ def _cv_group(
 
 
 @fast_holidays()
-@_reuse_stan_model()
+@reuse_stan_model()
 def cross_validation_many(
     models: Mapping[Hashable, Prophet],
     horizon: str | pd.Timedelta,

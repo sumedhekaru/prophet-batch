@@ -5,6 +5,16 @@ API may still change between minor versions.
 
 ## Unreleased
 
+### Added
+
+- **`solver="batch" | "stan"`** on `fit_many`, `forecast_many` and `Pool.forecast_many`. `"batch"` (default) is
+  unchanged; `"stan"` fits every series exactly as `Prophet.fit` (bit for bit, with `fit_kwargs`), with the Stan model
+  loaded once per process and the faster holiday features below: 2.7× faster than stock `Prophet.fit` on a wide weekly
+  multiplicative model. For models fit one series at a time where Stan beats the batched solver.
+- **`prophet_batch.reuse_stan_model()`**: the context manager fit_many uses to load Prophet's Stan model once per
+  process, now public, for your own loops of `Prophet.fit` calls. The private name `_reuse_stan_model` remains as an
+  alias for this release.
+
 ### Performance
 
 - `fit_many` / `forecast_many` on a single series no longer preprocess it twice (the memory estimate for automatic
