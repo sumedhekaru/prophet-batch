@@ -28,6 +28,14 @@ API may still change between minor versions.
   multiplicative totals, not every seasonality and holiday component: values unchanged, 20% faster predict on a model
   with 7 holiday components.
 
+### Fixed
+
+- `forecast_many` dropped rows with a missing series id without a word (`fit_many` already raised); it now raises the
+  same `ValueError`, also for a long `futures` frame. A missing id column raises a `ValueError` naming `id_col`
+  instead of a bare `KeyError`.
+- An error while predicting a series (e.g. a NaN regressor value in its future) now names the series, as fit errors
+  already did, in `predict_many` and `forecast_many`.
+
 ### Documentation
 
 - README results on 0.1.2 from PyPI (`forecast_many`, five platforms, six public datasets, Spark at scale, a million
