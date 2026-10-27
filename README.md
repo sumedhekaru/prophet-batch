@@ -45,7 +45,7 @@ spends ≈ 130 s on platform start-up, loading and warm-up, the same for both. O
 - **Same accuracy:** WAPE 0.3438 vs 0.3446, MASE 1.4261 vs 1.4279 (difference within noise), on every platform; with
   holidays and with holidays + regressors as well (10.2–13.2× there).
 - **Fair comparisons:** with 0.1.2's default settings (history intervals simulated like stock) the gain was 3.2–4.8×;
-  0.2.0's default draws the history intervals from order statistics and is about as fast as the analytic mode; against
+  0.1.3's default draws the history intervals from order statistics and is about as fast as the analytic mode; against
   stock Prophet's fastest setup (future rows only, prophet-batch the same) it stays 11–39× on the public datasets
   ([page](https://github.com/sumedhekaru/prophet-batch-examples/blob/main/public_datasets/results/future-only-macos-m4.md)). Prophet ≥ 1.1.2 already includes the vectorized predict
   of O. Matar (2021), so these gains come on top of it.
@@ -223,7 +223,7 @@ intervals on history rows, which were most of the cost when the history is inclu
 | `history_uncertainty` | history rows | future rows | speed |
 |---|---|---|---|
 | `True` (default) | random, with exactly the distribution of stock's sampled intervals: only the order statistics the bounds read are drawn (MAP fits¹) | sampled, as with `False` | ≈ `False` |
-| `"sampled"` | 1,000 paths sampled, as stock Prophet (and prophet-batch ≤ 0.1.3) | sampled | like stock |
+| `"sampled"` | 1,000 paths sampled, as stock Prophet (and prophet-batch ≤ 0.1.2) | sampled | like stock |
 | `"analytic"` (MAP fits) | exact closed form: the limit of the sampled intervals | sampled, as with `False` | ≈ `False` |
 | `False` | NaN | sampled (identical to predicting the future rows alone) | fastest |
 
@@ -234,7 +234,7 @@ as with `"sampled"`; so is `prophet_batch.predict` without an `rng`, which stays
 
 `yhat` is the same in every mode. The future rows' intervals are equally valid draws in each mode, identical between
 `True`, `"analytic"` and `False`; with `"sampled"` the series' random stream is first used for the history rows. To
-reproduce forecasts of prophet-batch ≤ 0.1.3 exactly, pass `history_uncertainty="sampled"`.
+reproduce forecasts of prophet-batch ≤ 0.1.2 exactly, pass `history_uncertainty="sampled"`.
 
 ```python
 forecasts = predict_many(models, periods=28, seed=42, history_uncertainty="analytic")

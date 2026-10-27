@@ -96,7 +96,7 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
   `tests/test_history_uncertainty.py::test_order_statistics_have_the_sampled_distribution`,
   `tests/test_history_uncertainty.py::test_not_eligible_models_sample_every_path`,
   `tests/test_history_uncertainty.py::test_order_statistics_rng_none_is_stock`
-- **`history_uncertainty="sampled"`**: every path sampled; bit-identical to prophet-batch 0.1.3's default for the same
+- **`history_uncertainty="sampled"`**: every path sampled; bit-identical to prophet-batch 0.1.2's default for the same
   seed. `tests/test_predict.py::test_seeded_matches_fork`
 - **`history_uncertainty=False`**: history intervals NaN; future intervals exactly those of predicting the future
   rows alone. `tests/test_history_uncertainty.py::test_future_intervals_equal_future_only_predict`

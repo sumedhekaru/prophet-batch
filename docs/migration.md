@@ -46,9 +46,9 @@ assert list(forecasts["sku_0"].columns) == list(forecasts_stock["sku_0"].columns
 - `m.fit(df, **kwargs)` arguments go to `fit_many(..., fit_kwargs=...)` (a dict, or a function of the series id).
 - `np.random.seed(...)` before `predict` becomes `predict_many(..., seed=...)`: per-series seeds that do not depend
   on the order or the number of workers.
-- History intervals are drawn with stock's distribution but far faster by default (0.2.0); the draws are not the same
+- History intervals are drawn with stock's distribution but far faster by default (0.1.3); the draws are not the same
   numbers as stock's for a given seed. `history_uncertainty="analytic"` gives their exact closed form, `False` none,
-  and `"sampled"` simulates every path as stock does (as prophet-batch ≤ 0.1.3).
+  and `"sampled"` simulates every path as stock does (as prophet-batch ≤ 0.1.2).
 
 ## Futures with regressors or caps
 

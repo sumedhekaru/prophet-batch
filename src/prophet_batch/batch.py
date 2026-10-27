@@ -2034,7 +2034,7 @@ def predict_many(
     history_uncertainty: Passed to prophet_batch.predict (True, 'sampled', False or
         'analytic'). True (the default): intervals with stock Prophet's distribution,
         history rows from directly drawn order statistics (MAP fits); 'sampled':
-        every path sampled, as stock Prophet and prophet-batch before 0.2.0 do.
+        every path sampled, as stock Prophet and prophet-batch before 0.1.3 do.
     columns: Optional forecast column name(s) to keep, e.g. ['ds', 'yhat', 'yhat_lower',
         'yhat_upper']. Workers drop the other columns before sending results back,
         which saves memory and time when models have many components (holidays,

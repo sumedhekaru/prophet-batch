@@ -136,7 +136,7 @@ def test_analytic_rejects_mcmc():
         predict(m, history_uncertainty="analytic")
 
 
-# N3.2 (0.2.0): history_uncertainty=True with an rng draws history bounds from order statistics.
+# N3.2 (0.1.3): history_uncertainty=True with an rng draws history bounds from order statistics.
 
 OLD_PATH = ("not_vectorized", "regressor_predictor", "mcmc")  # sampled as before (not eligible)
 
