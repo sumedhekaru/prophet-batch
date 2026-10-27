@@ -216,7 +216,7 @@ def _forecast(
     future_by_id: Mapping[Hashable, pd.DataFrame] | None = None
     if isinstance(futures, pd.DataFrame):
         future_by_id = {sid: g.drop(columns=id_col).reset_index(drop=True)
-                        for sid, g in futures.groupby(id_col, sort=False)}
+                        for sid, g in futures.groupby(id_col, sort=False, observed=True)}
     elif futures is not None:
         future_by_id = futures
 

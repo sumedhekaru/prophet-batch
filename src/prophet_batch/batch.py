@@ -996,7 +996,7 @@ def _prepare(
     """
     order, batch, mult, constant, fallback, skipped = [], [], [], [], [], []
     shared_by_key: dict[tuple[bytes, bytes], list[tuple[dict[str, Any], _SharedFeatures]]] = {}
-    for sid, group in df.groupby(id_col, sort=False):
+    for sid, group in df.groupby(id_col, sort=False, observed=True):
         series_df = group.drop(columns=id_col).reset_index(drop=True)
         try:
             model = make_model(sid)
@@ -1132,7 +1132,7 @@ def _plan_tasks(
     """
     from prophet.forecaster import Prophet
 
-    rows_by_id = df.groupby(id_col, sort=False).indices
+    rows_by_id = df.groupby(id_col, sort=False, observed=True).indices
     ids = list(rows_by_id)
     if solver == 'stan':
         stan_ids, batch_ids = ids, []
@@ -1302,7 +1302,7 @@ def fit_many(
 
     if solver == 'stan':  # one series at a time: no batches to size
         return _fit_in_process(df, id_col, make_model, on_error, kwargs_for, stan=True)
-    rows_by_id = df.groupby(id_col, sort=False).indices
+    rows_by_id = df.groupby(id_col, sort=False, observed=True).indices
     ids = list(rows_by_id)
     if batch_size is not None and len(ids) <= batch_size:
         return _fit_in_process(df, id_col, make_model, on_error, kwargs_for)
