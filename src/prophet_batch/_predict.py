@@ -31,7 +31,7 @@ def predict(
     model: Prophet,
     df: pd.DataFrame | None = None,
     vectorized: bool = True,
-    history_uncertainty: bool | Literal['analytic'] = True,
+    history_uncertainty: bool | Literal['analytic', 'sampled'] = True,
     rng: np.random.Generator | None = None,
 ) -> pd.DataFrame:
     """Prophet.predict with a per-call random generator and history interval modes.
@@ -41,7 +41,10 @@ def predict(
     model: A fitted Prophet model.
     df: As in Prophet.predict (None predicts on the history).
     vectorized: As in Prophet.predict.
-    history_uncertainty: True (the default) samples intervals for every row, as stock
+    history_uncertainty: True (the default) gives intervals for every row with stock
+        Prophet's distribution: with an rng and a MAP fit, history rows draw only the
+        order statistics the bounds read (far faster; different draws than sampling
+        every path); otherwise, and with 'sampled', every path is sampled as stock
         Prophet does. False leaves history rows' yhat/trend intervals NaN and samples
         only future rows (exactly the intervals of predicting the future rows alone).
         'analytic' (MAP fits only) samples future rows as False does and gives history

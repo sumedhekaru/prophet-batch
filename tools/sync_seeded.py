@@ -24,6 +24,8 @@ METHODS = [
     'predict_uncertainty',
     '_future_uncertainty',
     '_analytic_history_intervals',
+    '_order_statistic_history_intervals',
+    '_norm_ppf',
     'sample_posterior_predictive',
     'sample_model',
     'sample_model_vectorized',

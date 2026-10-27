@@ -21,7 +21,7 @@ from predict_scenarios import SCENARIOS, build, params_owners  # noqa: E402
 logging.getLogger('cmdstanpy').disabled = True
 FORK = 'rng' in inspect.signature(Prophet.predict).parameters
 FIXTURES = np.load(Path(__file__).parent / 'fixtures' / 'seeded.npz')
-MODES = {'true': True, 'false': False, 'analytic': 'analytic'}
+MODES = {'true': True, 'sampled': 'sampled', 'false': False, 'analytic': 'analytic'}
 
 
 @pytest.fixture(scope='module', params=list(SCENARIOS))
