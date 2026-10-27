@@ -59,7 +59,7 @@ class _SeededSampling:
     piecewise_logistic: Any
     flat_trend: Any
     percentile: Any
-    _logistic_uncertainty: Any
+    _make_historical_mat_time: Any
 
     def predict(
         self,
@@ -660,6 +660,69 @@ class _SeededSampling:
         n_mat = np.hstack([np.zeros((len(mat), 1)), mat])[:, :-1]
         mat = (n_mat + mat) / 2
         return mat
+
+    def _logistic_uncertainty(
+        self,
+        mat: np.ndarray,
+        deltas: np.ndarray,
+        k: float,
+        m: float,
+        cap: np.ndarray,
+        t_time: np.ndarray,
+        n_length: int,
+        single_diff: float | None = None,
+    ) -> np.ndarray:
+        """
+        Vectorizes prophet's logistic uncertainty by creating a matrix of future possible trends.
+
+        Parameters
+        ----------
+        mat: A trend shift matrix returned by _make_trend_shift_matrix()
+        deltas: The size of the trend changes at each changepoint, estimated by the model
+        k: Float initial rate.
+        m: Float initial offset.
+        cap: np.array of capacities at each t.
+        t_time: The values of t in the model context (i.e. scaled so that anything > 1 represents the future)
+        n_length: For each path, the number of future steps to simulate
+        single_diff: The difference between each t step in the model context. Default None, inferred
+            from t_time.
+
+        Returns
+        -------
+        A numpy array with shape (n_samples, n_length), representing the width of the uncertainty interval
+        (standardized, not on the same scale as the actual data values) around 0.
+        """
+
+        def ffill(arr):
+            mask = arr == 0
+            idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+            np.maximum.accumulate(idx, axis=1, out=idx)
+            return arr[np.arange(idx.shape[0])[:, None], idx]
+
+        # for logistic growth we need to evaluate the trend all the way from the start of the train item
+        historical_mat, historical_time = self._make_historical_mat_time(
+            deltas, cast(np.ndarray, self.changepoints_t), t_time, len(mat), single_diff
+        )
+        mat = np.concatenate([historical_mat, mat], axis=1)
+        full_t_time = np.concatenate([historical_time, t_time])
+
+        # apply logistic growth logic on the slope changes
+        k_cum = np.concatenate((np.ones((mat.shape[0], 1)) * k, np.where(mat, np.cumsum(mat, axis=1) + k, 0)), axis=1)
+        k_cum_b = ffill(k_cum)
+        gammas = np.zeros_like(mat)
+        ks = 1 - k_cum_b[:, :-1] / k_cum_b[:, 1:]
+        # gamma is 0 wherever no path changes its slope (ks == 0), as is most
+        # of the history, so only those steps are computed (same arithmetic)
+        for i in np.flatnonzero((ks != 0).any(axis=0)):
+            x = full_t_time[i] - m - np.sum(gammas[:, :i], axis=1)
+            gammas[:, i] = x * ks[:, i]
+        # the data before the -n_length is the historical values, which are not needed, so cut the last n_length
+        k_t = (mat.cumsum(axis=1) + k)[:, -n_length:]
+        m_t = (gammas.cumsum(axis=1) + m)[:, -n_length:]
+        sample_trends = cap / (1 + np.exp(-k_t * (t_time - m_t)))
+        # remove the mean because we only need width of the uncertainty centered around 0
+        # we will add the width to the main forecast - yhat (which is the mean) - later
+        return sample_trends - sample_trends.mean(axis=0)
 
     def predictive_samples(
         self, df: pd.DataFrame, vectorized: bool = True, rng: np.random.Generator | None = None

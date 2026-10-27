@@ -27,6 +27,9 @@ API may still change between minor versions.
   `additive_terms`, `multiplicative_terms`, their bounds, `ds`, `cap`, `floor`) compute only the additive and
   multiplicative totals, not every seasonality and holiday component: values unchanged, 20% faster predict on a model
   with 7 holiday components.
+- Logistic-growth forecasts: the trend's uncertainty paths are computed only at the steps where some path changes its
+  slope (Prophet evaluates every history and future step, re-summing all earlier steps each time). Bit-identical
+  draws; predict 4× faster on 100 daily M5 items with 1,913 history rows (34.3 → 8.7 s), forecast_many 2.3× faster.
 
 ### Fixed
 
