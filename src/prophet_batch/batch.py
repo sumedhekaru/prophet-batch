@@ -1958,7 +1958,7 @@ def _select_columns(
 def _predict_chunk(
     items: Sequence[tuple[Hashable, Prophet, pd.DataFrame]],
     seed: int,
-    history_uncertainty: bool | Literal['analytic'],
+    history_uncertainty: bool | Literal['analytic', 'sampled'],
     columns: list[str] | None = None,
 ) -> list[tuple[Hashable, pd.DataFrame]]:
     """Worker: predict a list of (series_id, model, future) with per-series generators.
@@ -2013,7 +2013,7 @@ def predict_many(
     include_history: bool = True,
     seed: int | None = None,
     n_jobs: int = 1,
-    history_uncertainty: bool | Literal['analytic'] = True,
+    history_uncertainty: bool | Literal['analytic', 'sampled'] = True,
     columns: str | Sequence[str] | None = None,
 ) -> dict[Hashable, pd.DataFrame]:
     """Forecast many fitted models, reproducibly, optionally in parallel.
@@ -2031,7 +2031,10 @@ def predict_many(
         which is logged and stored in every forecast's `attrs['seed']`.
     n_jobs: Number of worker processes; 1 runs in this process, -1 uses all
         available CPUs (respecting a container's CPU limit).
-    history_uncertainty: Passed to prophet_batch.predict (True, False or 'analytic').
+    history_uncertainty: Passed to prophet_batch.predict (True, 'sampled', False or
+        'analytic'). True (the default): intervals with stock Prophet's distribution,
+        history rows from directly drawn order statistics (MAP fits); 'sampled':
+        every path sampled, as stock Prophet and prophet-batch before 0.1.3 do.
     columns: Optional forecast column name(s) to keep, e.g. ['ds', 'yhat', 'yhat_lower',
         'yhat_upper']. Workers drop the other columns before sending results back,
         which saves memory and time when models have many components (holidays,

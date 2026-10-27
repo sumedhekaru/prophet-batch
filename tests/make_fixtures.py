@@ -14,7 +14,7 @@ from prophet import Prophet
 sys.path.insert(0, str(Path(__file__).parent))
 from predict_scenarios import SCENARIOS, build, params_owners  # noqa: E402
 
-MODES = {'true': True, 'false': False, 'analytic': 'analytic'}
+MODES = {'true': True, 'sampled': 'sampled', 'false': False, 'analytic': 'analytic'}
 # The columns that depend on the random draws (the rest is checked against stock predict directly).
 RANDOM_COLUMNS = ['yhat_lower', 'yhat_upper', 'trend_lower', 'trend_upper']
 OUT = Path(__file__).parent / 'fixtures' / 'seeded.npz'

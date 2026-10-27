@@ -59,13 +59,13 @@ class _SeededSampling:
     piecewise_logistic: Any
     flat_trend: Any
     percentile: Any
-    _logistic_uncertainty: Any
+    _make_historical_mat_time: Any
 
     def predict(
         self,
         df: pd.DataFrame | None = None,
         vectorized: bool = True,
-        history_uncertainty: bool | Literal['analytic'] = True,
+        history_uncertainty: bool | Literal['analytic', 'sampled'] = True,
         rng: np.random.Generator | None = None,
     ) -> pd.DataFrame:
         """Predict using the prophet model.
@@ -80,7 +80,10 @@ class _SeededSampling:
             except when (growth = 'logistic' and mcmc_samples > 0).
         history_uncertainty: Whether to compute yhat/trend uncertainty intervals for rows
             within the history (ds up to the last training date). True (the default)
-            computes them for every row. False leaves them NaN for history rows and only
+            computes them for every row: with rng given and a MAP fit, history rows
+            draw only the order statistics the percentiles read (the same
+            distribution as sampling every path, far faster), otherwise every
+            path is sampled. 'sampled' always samples every path. False leaves them NaN for history rows and only
             samples the future rows, which is much faster when the history is included;
             the future intervals are then exactly those of predicting the future rows alone.
             'analytic' (MAP fits only) samples the future rows as False does and gives
@@ -98,10 +101,13 @@ class _SeededSampling:
             raise Exception('Model has not been fit.')
         analytic = (isinstance(history_uncertainty, str)
                     and history_uncertainty == 'analytic')
-        if not (analytic or isinstance(history_uncertainty, (bool, np.bool_))):
+        sampled = (isinstance(history_uncertainty, str)
+                   and history_uncertainty == 'sampled')
+        if not (analytic or sampled
+                or isinstance(history_uncertainty, (bool, np.bool_))):
             raise ValueError(
-                "history_uncertainty must be True, False or 'analytic', got {!r}."
-                .format(history_uncertainty))
+                "history_uncertainty must be True, False, 'analytic' or "
+                "'sampled', got {!r}.".format(history_uncertainty))
         if analytic and self.mcmc_samples > 0:
             raise ValueError(
                 "history_uncertainty='analytic' requires a MAP fit (mcmc_samples=0).")
@@ -128,8 +134,14 @@ class _SeededSampling:
 
         df['trend'] = self.predict_trend(df)
         seasonal_components = self.predict_seasonal_components(df)
+        # MAP history rows differ between samples only by iid noise, so their
+        # percentiles can come from the order statistics alone.
+        order_stats = (rng is not None
+                       and isinstance(history_uncertainty, (bool, np.bool_))
+                       and bool(history_uncertainty) and vectorized
+                       and self.mcmc_samples == 0 and not regressor_samples)
         if self.uncertainty_samples:
-            if history_uncertainty and not analytic:
+            if history_uncertainty and not analytic and not order_stats:
                 intervals = self.predict_uncertainty(df, vectorized, regressor_samples, rng=rng)
             else:
                 intervals = self._future_uncertainty(df, vectorized, regressor_samples, rng=rng)
@@ -150,6 +162,9 @@ class _SeededSampling:
         )
         if analytic and intervals is not None:
             self._analytic_history_intervals(df2, (df['t'] <= 1).to_numpy())
+        elif order_stats and intervals is not None:
+            self._order_statistic_history_intervals(
+                df2, (df['t'] <= 1).to_numpy(), cast(np.random.Generator, rng))
         return df2
 
     def _prepare_regressors_for_predict(
@@ -305,6 +320,121 @@ class _SeededSampling:
         fcst.loc[history, 'yhat_upper'] = yhat + half_width
         fcst.loc[history, 'trend_lower'] = trend
         fcst.loc[history, 'trend_upper'] = trend
+
+    def _order_statistic_history_intervals(
+        self, fcst: pd.DataFrame, history: np.ndarray,
+        rng: np.random.Generator,
+    ) -> None:
+        """Fill yhat/trend intervals of history rows from order statistics.
+
+        With one parameter set (MAP), the uncertainty_samples draws of a
+        history row are yhat + iid N(0, sigma_obs) * y_scale (the sampled
+        trend is deterministic for t <= 1). The interval bounds are linear
+        percentiles of those draws, which read two order statistics each;
+        those are drawn directly, so the bounds have the distribution of
+        sampling every path at a cost per row instead of per draw. Trend
+        bounds equal the trend, as sampling gives.
+
+        Parameters
+        ----------
+        fcst: Forecast dataframe with yhat and trend; updated in place.
+        history: Boolean mask of the history rows (t <= 1).
+        rng: numpy Generator for the draws.
+        """
+        if not history.any():
+            return
+        n = int(self.uncertainty_samples)
+        percents = [100 * (1.0 - self.interval_width) / 2,
+                    100 * (1.0 + self.interval_width) / 2]
+        # numpy's linear percentile: position j + g = (n - 1) * q
+        spots = []
+        for q in percents:
+            pos = (n - 1) * (q / 100)
+            j = min(max(int(np.floor(pos)), 0), n - 1)
+            spots.append((j, float(pos - np.floor(pos))))
+        ranks = sorted({r for j, _ in spots for r in (j + 1, min(j + 2, n))})
+        # Uniform order statistics are a Markov chain: given U(r') = u,
+        # U(r) = u + (1 - u) * Beta(r - r', n - r + 1).
+        rows = int(history.sum())
+        u = np.zeros(rows)
+        prev = 0
+        z = {}
+        for r in ranks:
+            u = u + (1 - u) * rng.beta(r - prev, n - r + 1, rows)
+            prev = r
+            z[r] = self._norm_ppf(np.clip(u, np.finfo(float).tiny,
+                                          np.nextafter(1.0, 0.0)))
+        sigma = float(np.ravel(self.params['sigma_obs'])[0])
+        scale = sigma * cast(float, self.y_scale)
+        yhat = fcst.loc[history, 'yhat'].to_numpy()
+        trend = fcst.loc[history, 'trend'].to_numpy()
+        for (j, g), col in zip(spots, ['yhat_lower', 'yhat_upper']):
+            a, b = z[j + 1], z[min(j + 2, n)]
+            # the interpolation of np.percentile's linear method
+            q_z = b - (b - a) * (1 - g) if g >= 0.5 else a + (b - a) * g
+            fcst.loc[history, col] = yhat + scale * q_z
+        fcst.loc[history, 'trend_lower'] = trend
+        fcst.loc[history, 'trend_upper'] = trend
+
+    @staticmethod
+    def _norm_ppf(p: np.ndarray) -> np.ndarray:
+        """Inverse standard normal CDF for p in (0, 1), vectorized.
+
+        Wichura's algorithm AS 241 (PPND16), accurate to about 1e-16.
+
+        Parameters
+        ----------
+        p: Probabilities in (0, 1).
+
+        Returns
+        -------
+        The standard normal quantiles of p.
+        """
+        a = (3.387132872796366608, 133.14166789178437745,
+             1971.5909503065514427, 13731.693765509461125,
+             45921.953931549871457, 67265.770927008700853,
+             33430.575583588128105, 2509.0809287301226727)
+        b = (1.0, 42.313330701600911252, 687.1870074920579083,
+             5394.1960214247511077, 21213.794301586595867,
+             39307.89580009271061, 28729.085735721942674,
+             5226.495278852545925)
+        c = (1.42343711074968357734, 4.6303378461565452959,
+             5.7694972214606914055, 3.64784832476320460504,
+             1.27045825245236838258, 0.24178072517745061177,
+             0.0227238449892691845833, 7.7454501427834140764e-4)
+        d = (1.0, 2.05319162663775882187, 1.6763848301838038494,
+             0.68976733498510000455, 0.14810397642748007459,
+             0.0151986665636164571966, 5.475938084995344946e-4,
+             1.05075007164441684324e-9)
+        e = (6.6579046435011037772, 5.4637849111641143699,
+             1.7848265399172913358, 0.29656057182850489123,
+             0.026532189526576123093, 0.0012426609473880784386,
+             2.71155556874348757815e-5, 2.01033439929228813265e-7)
+        f = (1.0, 0.59983220655588793769, 0.13692988092273580531,
+             0.0148753612908506148525, 7.868691311456132591e-4,
+             1.8463183175100546818e-5, 1.4215117583164458887e-7,
+             2.04426310338993978564e-15)
+
+        def poly(coef: tuple[float, ...], x: np.ndarray) -> np.ndarray:
+            out = np.full_like(x, coef[-1])
+            for k in reversed(coef[:-1]):
+                out = out * x + k
+            return out
+
+        p = np.asarray(p, dtype=float)
+        q = p - 0.5
+        out = np.empty_like(p)
+        central = np.abs(q) <= 0.425
+        r = 0.180625 - q[central] ** 2
+        out[central] = q[central] * poly(a, r) / poly(b, r)
+        tail = ~central
+        r = np.sqrt(-np.log(np.minimum(p[tail], 1 - p[tail])))
+        near = r <= 5.0
+        val = np.empty_like(r)
+        val[near] = poly(c, r[near] - 1.6) / poly(d, r[near] - 1.6)
+        val[~near] = poly(e, r[~near] - 5.0) / poly(f, r[~near] - 5.0)
+        out[tail] = np.where(q[tail] < 0, -val, val)
+        return out
 
     def sample_posterior_predictive(
         self,
@@ -660,6 +790,69 @@ class _SeededSampling:
         n_mat = np.hstack([np.zeros((len(mat), 1)), mat])[:, :-1]
         mat = (n_mat + mat) / 2
         return mat
+
+    def _logistic_uncertainty(
+        self,
+        mat: np.ndarray,
+        deltas: np.ndarray,
+        k: float,
+        m: float,
+        cap: np.ndarray,
+        t_time: np.ndarray,
+        n_length: int,
+        single_diff: float | None = None,
+    ) -> np.ndarray:
+        """
+        Vectorizes prophet's logistic uncertainty by creating a matrix of future possible trends.
+
+        Parameters
+        ----------
+        mat: A trend shift matrix returned by _make_trend_shift_matrix()
+        deltas: The size of the trend changes at each changepoint, estimated by the model
+        k: Float initial rate.
+        m: Float initial offset.
+        cap: np.array of capacities at each t.
+        t_time: The values of t in the model context (i.e. scaled so that anything > 1 represents the future)
+        n_length: For each path, the number of future steps to simulate
+        single_diff: The difference between each t step in the model context. Default None, inferred
+            from t_time.
+
+        Returns
+        -------
+        A numpy array with shape (n_samples, n_length), representing the width of the uncertainty interval
+        (standardized, not on the same scale as the actual data values) around 0.
+        """
+
+        def ffill(arr):
+            mask = arr == 0
+            idx = np.where(~mask, np.arange(mask.shape[1]), 0)
+            np.maximum.accumulate(idx, axis=1, out=idx)
+            return arr[np.arange(idx.shape[0])[:, None], idx]
+
+        # for logistic growth we need to evaluate the trend all the way from the start of the train item
+        historical_mat, historical_time = self._make_historical_mat_time(
+            deltas, cast(np.ndarray, self.changepoints_t), t_time, len(mat), single_diff
+        )
+        mat = np.concatenate([historical_mat, mat], axis=1)
+        full_t_time = np.concatenate([historical_time, t_time])
+
+        # apply logistic growth logic on the slope changes
+        k_cum = np.concatenate((np.ones((mat.shape[0], 1)) * k, np.where(mat, np.cumsum(mat, axis=1) + k, 0)), axis=1)
+        k_cum_b = ffill(k_cum)
+        gammas = np.zeros_like(mat)
+        ks = 1 - k_cum_b[:, :-1] / k_cum_b[:, 1:]
+        # gamma is 0 wherever no path changes its slope (ks == 0), as is most
+        # of the history, so only those steps are computed (same arithmetic)
+        for i in np.flatnonzero((ks != 0).any(axis=0)):
+            x = full_t_time[i] - m - np.sum(gammas[:, :i], axis=1)
+            gammas[:, i] = x * ks[:, i]
+        # the data before the -n_length is the historical values, which are not needed, so cut the last n_length
+        k_t = (mat.cumsum(axis=1) + k)[:, -n_length:]
+        m_t = (gammas.cumsum(axis=1) + m)[:, -n_length:]
+        sample_trends = cap / (1 + np.exp(-k_t * (t_time - m_t)))
+        # remove the mean because we only need width of the uncertainty centered around 0
+        # we will add the width to the main forecast - yhat (which is the mean) - later
+        return sample_trends - sample_trends.mean(axis=0)
 
     def predictive_samples(
         self, df: pd.DataFrame, vectorized: bool = True, rng: np.random.Generator | None = None

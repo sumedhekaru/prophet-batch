@@ -85,6 +85,19 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
 
 ## History intervals
 
+- **`history_uncertainty=True` (default) with a seed / rng**: for MAP fits, history bounds are drawn from the order
+  statistics they read (`yhat` + `sigma_obs·y_scale` × two normal order statistics per bound, numpy's linear
+  interpolation), so they have the distribution of sampling every path; trend bounds equal the trend; future rows and
+  all other columns equal `False`'s. Checked: the bounds' distribution against `"sampled"` (KS at 0.001, means within
+  4 standard errors), and offline against brute-force sampling and the exact expected bounds (20 million rows,
+  all within 1.2 standard errors). MCMC fits, `vectorized=False` and regressor
+  predictors keep `"sampled"`'s path; without an rng, `prophet_batch.predict` is stock's predict.
+  `tests/test_history_uncertainty.py::test_order_statistics_history_and_future_equal_false`,
+  `tests/test_history_uncertainty.py::test_order_statistics_have_the_sampled_distribution`,
+  `tests/test_history_uncertainty.py::test_not_eligible_models_sample_every_path`,
+  `tests/test_history_uncertainty.py::test_order_statistics_rng_none_is_stock`
+- **`history_uncertainty="sampled"`**: every path sampled; bit-identical to prophet-batch 0.1.2's default for the same
+  seed. `tests/test_predict.py::test_seeded_matches_fork`
 - **`history_uncertainty=False`**: history intervals NaN; future intervals exactly those of predicting the future
   rows alone. `tests/test_history_uncertainty.py::test_future_intervals_equal_future_only_predict`
 - **`history_uncertainty="analytic"`** (MAP fits; MCMC raises): history bounds are `yhat ± z·sigma_obs·y_scale` and

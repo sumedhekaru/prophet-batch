@@ -24,6 +24,8 @@ METHODS = [
     'predict_uncertainty',
     '_future_uncertainty',
     '_analytic_history_intervals',
+    '_order_statistic_history_intervals',
+    '_norm_ppf',
     'sample_posterior_predictive',
     'sample_model',
     'sample_model_vectorized',
@@ -31,6 +33,7 @@ METHODS = [
     'sample_predictive_trend_vectorized',
     '_sample_uncertainty',
     '_make_trend_shift_matrix',
+    '_logistic_uncertainty',
     'predictive_samples',
     '_percentile_skip_constant_rows',
 ]
@@ -104,7 +107,7 @@ class _SeededSampling:
     piecewise_logistic: Any
     flat_trend: Any
     percentile: Any
-    _logistic_uncertainty: Any
+    _make_historical_mat_time: Any
 
 '''
 

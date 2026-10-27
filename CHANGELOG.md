@@ -5,7 +5,21 @@ API may still change between minor versions.
 
 ## 0.1.3 (2026-10-27)
 
+### Changed
+
+- **Faster history intervals by default, same distribution.** With a seed (every batch function) and a MAP fit,
+  `history_uncertainty=True` no longer simulates 1,000 paths over every history row: a history row's draws differ
+  only by iid noise, so the two order statistics each bound reads are drawn directly. The bounds have exactly the
+  distribution of stock Prophet's sampled intervals (checked against brute-force sampling and the exact expected
+  bounds), `yhat` and every other column are unchanged, and default forecasts are 4–6× faster (M5 items, 300
+  series, one process: 14.1 → 2.5 s, now ≈ 24× stock). The random draws differ from 0.1.2's; pass
+  `history_uncertainty="sampled"` to reproduce them exactly. `prophet_batch.predict` without an `rng` is still
+  stock's predict, and MCMC fits, `vectorized=False` and regressor predictors are sampled as before.
+
 ### Added
+
+- **`history_uncertainty="sampled"`**: every path sampled, as stock Prophet and prophet-batch ≤ 0.1.2 (bit-identical
+  draws for the same seed).
 
 - **`solver="batch" | "stan"`** on `fit_many`, `forecast_many` and `Pool.forecast_many`. `"batch"` (default) is
   unchanged; `"stan"` fits every series exactly as `Prophet.fit` (bit for bit, with `fit_kwargs`), with the Stan model
@@ -27,6 +41,9 @@ API may still change between minor versions.
   `additive_terms`, `multiplicative_terms`, their bounds, `ds`, `cap`, `floor`) compute only the additive and
   multiplicative totals, not every seasonality and holiday component: values unchanged, 20% faster predict on a model
   with 7 holiday components.
+- Logistic-growth forecasts: the trend's uncertainty paths are computed only at the steps where some path changes its
+  slope (Prophet evaluates every history and future step, re-summing all earlier steps each time). Bit-identical
+  draws; predict 4× faster on 100 daily M5 items with 1,913 history rows (34.3 → 8.7 s), forecast_many 2.3× faster.
 
 ### Fixed
 
