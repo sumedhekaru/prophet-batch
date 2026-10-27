@@ -348,6 +348,10 @@ between releases.
 - **Windows**: stock Prophet pays ≈ 100 ms per model there (cmdstanpy starts a `where.exe` process each time a
   model is created); prophet-batch avoids it since 0.1.1 by reusing one loaded Stan model per process, which is
   why its Windows speed-up (11.6×) is in line with the other platforms.
+- **Apple M4 with numpy 1.x**: the OpenBLAS bundled with numpy 1.22–1.26 can hang (0% CPU) in `np.linalg.solve`
+  on M4 Macs, also in Linux containers on them, with no other package involved; numpy 1.21 crashes. prophet-batch's
+  solvers use it far more than stock Prophet, so they hit it first. Use numpy ≥ 2.0, or set
+  `OPENBLAS_NUM_THREADS=1` before starting Python. (Seen on an M4; numpy 1.x has not been tested on other chips.)
 
 More: [docs/guarantees.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/guarantees.md) (what is guaranteed and how it is tested) and
 [docs/migration.md](https://github.com/sumedhekaru/prophet-batch/blob/main/docs/migration.md) (from a stock loop or process pool).

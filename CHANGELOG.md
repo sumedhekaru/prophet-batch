@@ -35,6 +35,8 @@ API may still change between minor versions.
   instead of a bare `KeyError`.
 - An error while predicting a series (e.g. a NaN regressor value in its future) now names the series, as fit errors
   already did, in `predict_many` and `forecast_many`.
+- A categorical id column with unused categories failed with pandas < 3 (each unused category was grouped as an empty
+  series); series are now the observed ids only, with any pandas.
 
 ### Documentation
 

@@ -177,6 +177,17 @@ def test_series_ids_checked():
         forecast_many(df, futures=future.drop(columns="unique_id"), seed=0)
 
 
+def test_categorical_ids_with_unused_categories():
+    """0.1.3 (M8d): unused categories of a categorical id are not series (pandas < 3 grouped them as empty)."""
+    df = _long({"a": make_series(), "b": make_series(seed=1)})
+    cat = df.assign(unique_id=pd.Categorical(df["unique_id"], categories=["a", "b", "unused"]))
+    ref = forecast_many(df, periods=3, seed=0)
+    for n_jobs in (1, 2):
+        out = forecast_many(cat, periods=3, seed=0, n_jobs=n_jobs)
+        pd.testing.assert_frame_equal(out.assign(unique_id=out["unique_id"].astype(str)), ref)
+    assert list(fit_many(cat)) == ["a", "b"]
+
+
 @pytest.mark.parametrize("n_jobs", [1, 2])
 def test_predict_error_names_the_series(n_jobs):
     """0.1.3 (M8d): an error while predicting one series says which series it was."""
