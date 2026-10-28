@@ -87,7 +87,6 @@ def test_errors():
 FORK_SOURCE = Path(__file__).resolve().parents[2] / 'prophet-dev' / 'python' / 'prophet' / 'forecaster.py'
 
 
-@pytest.mark.skipif(not FORK_SOURCE.exists(), reason='prophet-dev checkout not available')
 def test_logistic_paths_match_prophet():
     """The seeded copy computes logistic trend paths only where a slope changes: the
     same draws as the installed Prophet's _logistic_uncertainty (every step)."""
@@ -108,6 +107,7 @@ def test_logistic_paths_match_prophet():
         assert np.array_equal(view._logistic_uncertainty(**args), expected)
 
 
+@pytest.mark.skipif(not FORK_SOURCE.exists(), reason='prophet-dev checkout not available')
 def test_generated_module_is_in_sync_with_fork():
     script = Path(__file__).parents[1] / 'tools' / 'sync_seeded.py'
     out = subprocess.run([sys.executable, str(script), '--check'], capture_output=True, text=True)
