@@ -5,8 +5,10 @@
 [![CI](https://github.com/sumedhekaru/prophet-batch/actions/workflows/ci.yml/badge.svg)](https://github.com/sumedhekaru/prophet-batch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/pypi/l/prophet-batch)](https://github.com/sumedhekaru/prophet-batch/blob/main/LICENSE)
 
-**Forecast thousands to millions of series with [Prophet](https://github.com/facebook/prophet), 10–37× faster than
-a stock Prophet process pool on the same cores, with the same accuracy.** prophet-batch runs on top of the stock
+**Forecast thousands to millions of series with [Prophet](https://github.com/facebook/prophet), with the same
+accuracy, up to 37× faster than a stock Prophet process pool on the same cores:** 10–16× on 1,437 Walmart items
+across laptop, Docker, Cloud Run and Windows, 15× on 30,490 M5 series, 37× on M4 Daily's long series, and 2.7–8× on
+small jobs of a few hundred short series. prophet-batch runs on top of the stock
 `prophet` package (≥ 1.5): your models stay ordinary `Prophet` objects, and your data stays in your hands.
 
 - **`fit_many`** fits all series together with exact batched solvers instead of one Stan optimization per series.
@@ -27,8 +29,12 @@ and on Spark (Dataproc); six public forecasting datasets; and a large CSV foreca
 
 1,437 Walmart grocery items (M5, FOODS, daily, 28 days ahead), default `Prophet()`, fit + forecast with
 `forecast_many` (analytic history intervals), against stock Prophet run the way people parallelize it: a process pool
-on every core. prophet-batch 0.1.2 from PyPI, median of 3 runs ([all tables, and the code to rerun
-them](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting)):
+on every core. Measured on prophet-batch 0.1.2 from PyPI, median of 3 runs ([all tables, and the code to rerun
+them](https://github.com/sumedhekaru/prophet-batch-examples/tree/main/walmart_grocery_forecasting)). Every result
+in this section was measured on 0.1.2 with analytic history intervals, and holds for 0.1.3: in that mode 0.1.3 gives
+bit-identical forecasts at the same speed, or faster with many holidays (checked against 0.1.2 on five workloads).
+What 0.1.3 speeds up is the default mode: 4.6–5.7× faster on M5 and M4 Daily, now as fast as analytic (see "Fair
+comparisons" below), and logistic growth (2.7×).
 
 | environment | stock Prophet, process pool | prophet-batch | faster |
 |---|---:|---:|---:|
@@ -81,8 +87,9 @@ Spark on Dataproc) and every result page reproducible from its run records.
 - **Shared work.** Series with the same dates and configuration share their features and design matrices.
 - **Fast history intervals with stock's distribution.** Sampling 1,000 paths over every history row was most of a
   forecast's time. For a MAP fit, a history row's draws differ only by iid noise, so prophet-batch draws just the
-  order statistics the interval bounds are read from: the same distribution as stock's sampling, 4–6× faster
-  forecasts by default. `history_uncertainty="analytic"` gives the closed form those intervals converge to.
+  order statistics the interval bounds are read from: the same distribution as stock's sampling, up to 5–6× faster
+  forecasts by default (M5 items: 14.1 → 2.5 s; less where histories are short). `history_uncertainty="analytic"`
+  gives the closed form those intervals converge to.
 - **Bit-identical results** for any `n_jobs`, `batch_size`, series order and split of the input: a series' fit
   depends only on its own data, and its forecast only on (seed, series id). Across CPU types they agree to ≈ 1e-9.
 - **Stock behaviour where it matters.** Defaults follow stock Prophet; fitted models work with `plot`,
@@ -269,9 +276,10 @@ fc = forecast_many(some, futures=futures, seed=0, columns=["ds", "yhat", "yhat_l
 `forecast_many` fits and forecasts in one step and returns one long DataFrame: the series id first, then exactly what
 stock Prophet's `model.predict(model.make_future_dataframe(periods))` returns for each series (equal to
 `predict_many(fit_many(df), ...)` for that series and seed). No fitted model is kept or sent between processes, so
-it is faster and uses less memory than the two steps; on 15,000 M5 item × store series (10 workers, Apple M4):
-138.5 s and a 7.2 GB peak with stock's full output vs 147.9 s and 8.6 GB, and 26.5 s and 4.0 GB vs 33.7 s and 6.3 GB
-with `columns=["ds", "yhat", "yhat_lower", "yhat_upper"]` and `history_uncertainty="analytic"`.
+it is faster and uses less memory than the two steps; on 15,000 M5 item × store series (10 workers, Apple M4,
+0.1.3): 31.8 s and a 7.1 GB peak with stock's full output vs 49.0 s and 8.3 GB, and 27.5 s and 4.1 GB vs 35.5 s and
+5.6 GB with `columns=["ds", "yhat", "yhat_lower", "yhat_upper"]` and `history_uncertainty="analytic"` (0.1.2's
+sampled default took 138.5 s for the full output).
 
 ```python
 from prophet_batch import Pool, forecast_many
@@ -343,13 +351,16 @@ between releases.
 
 ## Limitations
 
-- Logistic growth, MCMC and regressor predictors are fit by Stan (correct, but not faster than stock).
+- Logistic growth, MCMC and regressor predictors are fit by Stan: the fit is not faster than stock's. Logistic
+  forecasts still gain from the faster trend sampling (since 0.1.3): ≈ 3× stock overall in one process, 4× with 10
+  workers, on 100 M5 items.
 - **Wide models fit one series at a time**: the batched solver's cost grows with the cube of the number of
   parameters, and it is shared only among series of the same length. A multiplicative weekly model with 233
   parameters fit alone takes 71 ms with the batched solver vs 30 ms with `solver="stan"`. See "Choosing the
   solver".
-- Prediction intervals are about 0.04–0.6 percentage points narrower than stock's on public data: the exact MAP
-  fits a little tighter than Stan's L-BFGS, which stops short of the optimum.
+- Prediction intervals are slightly narrower than stock's: on six public datasets, 80% intervals covered 0.04–0.6
+  percentage points less often. The exact MAP fits a little tighter than Stan's L-BFGS, which stops short of the
+  optimum.
 - **Memory**: each worker holds one batch at a time (about 0.5–0.6 GB per worker for M5's 1,941-day series), but
   the models `fit_many` returns stay in your process: ≈ 0.12 MB per series at that length, mostly the history
   frame every stock Prophet model keeps (30,490 such series: ≈ 4 GB for the models alone). When you only need the
@@ -359,7 +370,7 @@ between releases.
   (Windows laptop, 400 items: 5.8 s with 4 workers vs 11.0 s with 16).
 - **Windows**: stock Prophet pays ≈ 100 ms per model there (cmdstanpy starts a `where.exe` process each time a
   model is created); prophet-batch avoids it since 0.1.1 by reusing one loaded Stan model per process, which is
-  why its Windows speed-up (11.6×) is in line with the other platforms.
+  why its Windows speed-up (15.8× on 1,437 Walmart items, 0.1.2) is in line with the other platforms.
 - **Apple M4 with numpy 1.x**: the OpenBLAS bundled with numpy 1.22–1.26 can hang (0% CPU) in `np.linalg.solve`
   on M4 Macs, also in Linux containers on them, with no other package involved; numpy 1.21 crashes. prophet-batch's
   solvers use it far more than stock Prophet, so they hit it first. Use numpy ≥ 2.0, or set

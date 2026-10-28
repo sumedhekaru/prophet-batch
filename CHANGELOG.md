@@ -3,6 +3,17 @@
 All notable changes to prophet-batch. Versions follow [semantic versioning](https://semver.org/); before 1.0 the public
 API may still change between minor versions.
 
+## Unreleased
+
+### Documentation
+
+- README headline: "up to 37×" with the range behind it (10–16× on 1,437 Walmart items across four platforms, 15× on
+  30,490 M5 series, 37× on M4 Daily, 2.7–8× on small jobs), instead of "10–37×", which hid the small jobs.
+- README: results measured on 0.1.2 say so, and why they hold for 0.1.3; `forecast_many` memory and time on 15,000
+  series re-measured on 0.1.3; limitations corrected (logistic forecasts are faster since 0.1.3; Windows 15.8×, not
+  0.1.1's 11.6×; intervals cover 0.04–0.6 points less often, not "narrower by"); guarantees.md's small-workload
+  example updated (Tourism Monthly 2.7×, not 1.5×).
+
 ## 0.1.3 (2026-10-27)
 
 ### Changed

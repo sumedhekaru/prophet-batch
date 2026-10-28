@@ -124,7 +124,8 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
 
 ## Limitations
 
-- **Not batched**: logistic growth, MCMC, regressor predictors. They are fit by Stan (correct, not faster than stock).
+- **Not batched**: logistic growth, MCMC, regressor predictors. They are fit by Stan (correct; the fit is not faster
+  than stock's, though logistic forecasts are, through the faster trend sampling).
 - **Wide models fit one series at a time** can be faster with `solver="stan"` (README, "Choosing the solver"); the
   default is not switched automatically, because a series' solver must not depend on its batch mates.
 - **Slightly narrower intervals**: on six public datasets, 80% intervals covered 0.04–0.6 percentage points less than
@@ -133,7 +134,7 @@ repository; the suite runs on stock PyPI prophet in CI on Linux, macOS and Windo
 - **Forecasts differ slightly from stock** for batched series, because the fit is the true optimum rather than
   Stan's approximation of it; the log posterior is never lower.
 - **Small workloads**: with few short series, worker start-up dominates (Tourism Monthly, 366 series of ~300 rows:
-  1.5× vs stock); use `n_jobs=1` there.
+  2.7× a 10-process stock pool with `forecast_many`, 0.1.2); try `n_jobs=1` or fewer workers there.
 - **Prophet subclasses that override `predict`**: `prophet_batch.predict` (and so `predict_many`) uses Prophet's
   predict logic with seeded sampling, not the override, and warns.
   `tests/test_predict.py::test_subclass_predict_override_warns`
